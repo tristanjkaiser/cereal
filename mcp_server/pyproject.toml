@@ -1,10 +1,11 @@
 [project]
-name = "pm-agent-mcp"
+name = "cereal-mcp"
 version = "0.1.0"
-description = "MCP server for PM Agent meeting archive"
+description = "MCP server for Cereal meeting archive"
 requires-python = ">=3.10"
 dependencies = [
     "mcp[cli]>=1.0.0",
     "psycopg2-binary>=2.9.0",
     "python-dotenv>=1.0.0",
+    "requests>=2.28.0",
 ]

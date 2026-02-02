@@ -1,6 +1,6 @@
 #!/bin/bash
 # Cereal MCP Server launcher
-# Portable version - works from any installation directory
+# Uses uv for dependency management
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -8,4 +8,4 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 export PYTHONPATH="${PYTHONPATH}:${PROJECT_DIR}"
 export DATABASE_URL="${DATABASE_URL:-postgresql://localhost:5432/cereal}"
 
-exec "$SCRIPT_DIR/.venv/bin/python" "$SCRIPT_DIR/server.py"
+exec /Users/tkaiser/.local/bin/uv run --directory "$SCRIPT_DIR" python server.py

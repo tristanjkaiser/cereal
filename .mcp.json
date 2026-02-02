@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "cereal": {
+      "command": "/Users/tkaiser/Goji/cereal/mcp_server/run_server.sh",
+      "env": {
+        "DATABASE_URL": "postgresql://localhost:5432/cereal"
+      }
+    }
+  }
+}

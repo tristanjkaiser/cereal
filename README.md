@@ -24,7 +24,7 @@ Query your [Granola](https://granola.ai) meeting transcripts directly from Claud
 ### 1. Clone and setup
 
 ```bash
-git clone https://github.com/yourusername/cereal.git
+git clone https://github.com/tristanjkaiser/cereal.git
 cd cereal
 ```
 

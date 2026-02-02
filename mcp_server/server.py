@@ -423,6 +423,213 @@ def archive_new_meetings(limit: int = 50) -> str:
     return "\n".join(lines)
 
 
+# Client Context Tools
+
+@mcp.tool()
+def add_client_context(
+    client_name: str,
+    title: str,
+    content: str,
+    context_type: str = "note",
+    source_url: str = None
+) -> str:
+    """Add a context document for a client (PRD, estimate, outcome, etc.).
+
+    Args:
+        client_name: Name of the client (e.g., "NGynS", "Mothership")
+        title: Title of the document (e.g., "Q1 2026 Estimate", "PRD v2")
+        content: Full content/text of the document
+        context_type: Type of document - prd, estimate, outcome, contract, or note (default: note)
+        source_url: Optional URL link to original document (Google Doc, Notion, etc.)
+
+    Returns:
+        Confirmation with the created context ID.
+    """
+    db = get_db()
+
+    # Get or create client
+    client = db.get_client_by_name(client_name)
+    if not client:
+        client_id = db.get_or_create_client(client_name)
+    else:
+        client_id = client['id']
+
+    context_id = db.add_client_context(
+        client_id=client_id,
+        title=title,
+        content=content,
+        context_type=context_type,
+        source_url=source_url
+    )
+
+    return f"Saved '{title}' ({context_type}) for {client_name}. Context ID: {context_id}"
+
+
+@mcp.tool()
+def list_client_context(client_name: str) -> str:
+    """List all context documents for a client.
+
+    Args:
+        client_name: Name of the client
+
+    Returns:
+        List of context documents with titles, types, and IDs.
+    """
+    db = get_db()
+
+    client = db.get_client_by_name(client_name)
+    if not client:
+        return f"No client found with name '{client_name}'."
+
+    contexts = db.list_client_context(client['id'])
+
+    if not contexts:
+        return f"No context documents found for {client_name}."
+
+    lines = [f"# Context Documents for {client_name}\n"]
+    for ctx in contexts:
+        date_str = ctx['updated_at'].strftime('%Y-%m-%d')
+        url_note = f" ([link]({ctx['source_url']}))" if ctx.get('source_url') else ""
+        lines.append(f"- **[{ctx['id']}]** {ctx['title']} ({ctx['context_type']}) - {date_str}{url_note}")
+
+    lines.append(f"\nUse `get_client_context(id)` to retrieve full content.")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def get_client_context(context_id: int) -> str:
+    """Get the full content of a specific context document.
+
+    Args:
+        context_id: Database ID of the context document (shown in brackets in list)
+
+    Returns:
+        Full content of the document with metadata.
+    """
+    db = get_db()
+
+    ctx = db.get_client_context_by_id(context_id)
+
+    if not ctx:
+        return f"Context document with ID {context_id} not found."
+
+    lines = [
+        f"# {ctx['title']}",
+        f"**Client:** {ctx['client_name']}",
+        f"**Type:** {ctx['context_type']}",
+        f"**Updated:** {ctx['updated_at'].strftime('%Y-%m-%d %H:%M')}",
+    ]
+
+    if ctx.get('source_url'):
+        lines.append(f"**Source:** {ctx['source_url']}")
+
+    lines.append("")
+    lines.append(ctx['content'])
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def search_client_context(query: str, client_name: str = None) -> str:
+    """Search across all client context documents.
+
+    Args:
+        query: Search term to find in context documents
+        client_name: Optional - limit search to a specific client
+
+    Returns:
+        Matching documents with content previews.
+    """
+    db = get_db()
+
+    client_id = None
+    if client_name:
+        client = db.get_client_by_name(client_name)
+        if client:
+            client_id = client['id']
+
+    results = db.search_client_context(query, client_id=client_id)
+
+    if not results:
+        scope = f" for {client_name}" if client_name else ""
+        return f"No context documents found matching '{query}'{scope}."
+
+    lines = [f"# Search Results for '{query}'\n"]
+
+    for ctx in results:
+        lines.append(f"## [{ctx['id']}] {ctx['title']}")
+        lines.append(f"*Client: {ctx['client_name']} | Type: {ctx['context_type']} | Relevance: {ctx['rank']:.2f}*\n")
+        if ctx.get('content_preview'):
+            lines.append(f"{ctx['content_preview']}...")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def update_client_context(
+    context_id: int,
+    content: str = None,
+    title: str = None,
+    context_type: str = None
+) -> str:
+    """Update an existing context document.
+
+    Args:
+        context_id: Database ID of the context to update
+        content: New content (replaces existing)
+        title: New title (optional)
+        context_type: New type (optional)
+
+    Returns:
+        Confirmation of update.
+    """
+    db = get_db()
+
+    # Verify it exists
+    ctx = db.get_client_context_by_id(context_id)
+    if not ctx:
+        return f"Context document with ID {context_id} not found."
+
+    success = db.update_client_context(
+        context_id=context_id,
+        title=title,
+        content=content,
+        context_type=context_type
+    )
+
+    if success:
+        return f"Updated context document [{context_id}] '{ctx['title']}' for {ctx['client_name']}."
+    else:
+        return "No changes made (no update fields provided)."
+
+
+@mcp.tool()
+def delete_client_context(context_id: int) -> str:
+    """Delete a context document.
+
+    Args:
+        context_id: Database ID of the context to delete
+
+    Returns:
+        Confirmation of deletion.
+    """
+    db = get_db()
+
+    # Get info before deleting
+    ctx = db.get_client_context_by_id(context_id)
+    if not ctx:
+        return f"Context document with ID {context_id} not found."
+
+    success = db.delete_client_context(context_id)
+
+    if success:
+        return f"Deleted '{ctx['title']}' ({ctx['context_type']}) from {ctx['client_name']}."
+    else:
+        return f"Failed to delete context document {context_id}."
+
+
 if __name__ == "__main__":
     logger.info("Starting MCP server...")
     try:

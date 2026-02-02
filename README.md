@@ -11,6 +11,7 @@ Query your [Granola](https://granola.ai) meeting transcripts directly from Claud
 - **Full transcripts** - get complete meeting details on demand
 - **Archive from Claude** - tell Claude to "archive my recent meetings"
 - **Client management** - auto-detect clients from meeting titles
+- **Client context** - store PRDs, estimates, and other docs per client
 
 ## Prerequisites
 
@@ -80,6 +81,8 @@ Ask Claude: "Archive my recent meetings from Granola"
 
 ## MCP Tools
 
+### Meeting Tools
+
 | Tool | Description |
 |------|-------------|
 | `archive_new_meetings` | Archive new meetings from Granola |
@@ -92,15 +95,33 @@ Ask Claude: "Archive my recent meetings from Granola"
 | `find_meeting_by_title` | Find meetings by title |
 | `get_meeting_stats` | Archive statistics |
 
+### Client Context Tools
+
+| Tool | Description |
+|------|-------------|
+| `add_client_context` | Save PRDs, estimates, outcomes for a client |
+| `list_client_context` | List all context docs for a client |
+| `get_client_context` | Get full content of a context doc |
+| `search_client_context` | Search across all client context |
+| `update_client_context` | Update an existing context doc |
+| `delete_client_context` | Delete a context doc |
+
 ## Example Conversations
 
 Once configured, you can ask Claude things like:
 
+**Meetings:**
 - "Archive my recent meetings"
 - "What clients do I have meetings with?"
 - "Search my meetings for authentication"
 - "What did we discuss with [Client] last week?"
 - "Get the transcript for meeting ID 42"
+
+**Client Context:**
+- "Save this PRD for NGynS: [paste content]"
+- "What context docs do we have for Mothership?"
+- "Search client docs for pricing requirements"
+- "Update the NGynS estimate with the latest numbers"
 
 ## Project Structure
 

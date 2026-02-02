@@ -39,7 +39,7 @@ Granola (local app) → GranolaClient → PostgreSQL ← MCP Server → Claude D
 
 ## Database Schema
 
-Three tables: `clients`, `meeting_series`, `meetings`
+Four tables: `clients`, `meeting_series`, `meetings`, `client_context`
 
 The `meetings` table stores:
 - `granola_document_id` - unique ID from Granola
@@ -49,11 +49,20 @@ The `meetings` table stores:
 - `summary_overview`, `summary_json` - AI summaries
 - `client_id` - foreign key to clients
 
-Full-text search indexes exist on transcript, notes, and summary fields.
+The `client_context` table stores:
+- `client_id` - foreign key to clients
+- `title` - document title (e.g., "Q1 Estimate", "PRD v2")
+- `context_type` - prd, estimate, outcome, contract, note
+- `content` - full text content
+- `source_url` - optional link to original doc
+
+Full-text search indexes exist on transcript, notes, summary, and context fields.
 
 ## MCP Tools
 
 The server exposes these tools to Claude:
+
+### Meeting Tools
 
 | Tool | Description |
 |------|-------------|
@@ -66,6 +75,17 @@ The server exposes these tools to Claude:
 | `get_meeting_transcript` | Get full transcript (by ID) |
 | `find_meeting_by_title` | Search meetings by title |
 | `get_meeting_stats` | Archive statistics |
+
+### Client Context Tools
+
+| Tool | Description |
+|------|-------------|
+| `add_client_context` | Save PRD, estimate, outcome, etc. for a client |
+| `list_client_context` | List all context docs for a client |
+| `get_client_context` | Get full content by context ID |
+| `search_client_context` | Full-text search across context docs |
+| `update_client_context` | Update existing context doc |
+| `delete_client_context` | Delete a context doc |
 
 ## Development
 
@@ -113,3 +133,11 @@ Located at `~/Library/Application Support/Claude/claude_desktop_config.json`:
   }
 }
 ```
+
+## Common Issues
+
+**"uv: not found"** - The run_server.sh uses the full path to uv at `/Users/tkaiser/.local/bin/uv`. Update if uv is installed elsewhere.
+
+**"No module named X"** - Add the dependency to `mcp_server/pyproject.toml` and run `uv sync`.
+
+**"database does not exist"** - Run `createdb cereal` then `psql cereal < scripts/setup_database.sql`.

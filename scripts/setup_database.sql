@@ -68,3 +68,24 @@ CREATE INDEX IF NOT EXISTS idx_meetings_content_fts ON meetings
         COALESCE(enhanced_notes, '') || ' ' ||
         COALESCE(summary_overview, '')
     ));
+
+-- Client context documents (PRDs, estimates, outcomes, etc.)
+CREATE TABLE IF NOT EXISTS client_context (
+    id SERIAL PRIMARY KEY,
+    client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE,
+    title VARCHAR(255) NOT NULL,
+    context_type VARCHAR(50) DEFAULT 'note',  -- prd, estimate, outcome, contract, note
+    content TEXT NOT NULL,
+    content_summary TEXT,  -- Optional summary for token efficiency
+    source_url TEXT,  -- Optional link to original doc
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Indexes for client context
+CREATE INDEX IF NOT EXISTS idx_client_context_client ON client_context(client_id);
+CREATE INDEX IF NOT EXISTS idx_client_context_type ON client_context(context_type);
+
+-- Full-text search on client context
+CREATE INDEX IF NOT EXISTS idx_client_context_fts ON client_context
+    USING gin(to_tsvector('english', COALESCE(title, '') || ' ' || COALESCE(content, '')));

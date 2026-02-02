@@ -533,6 +533,174 @@ class DatabaseManager:
             cursor.execute(query, params)
             return cursor.fetchall()
 
+    # Client context methods
+
+    def add_client_context(
+        self,
+        client_id: int,
+        title: str,
+        content: str,
+        context_type: str = "note",
+        source_url: Optional[str] = None
+    ) -> int:
+        """
+        Add a context document for a client.
+
+        Args:
+            client_id: Database ID of the client
+            title: Title of the document
+            content: Full content/text
+            context_type: Type (prd, estimate, outcome, contract, note)
+            source_url: Optional link to original document
+
+        Returns:
+            The database ID of the created context
+        """
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO client_context (client_id, title, content, context_type, source_url)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING id
+            """, (client_id, title, content, context_type, source_url))
+            result = cursor.fetchone()
+            return result['id'] if result else None
+
+    def get_client_context_by_id(self, context_id: int) -> Optional[Dict]:
+        """Get a context document by its ID."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT cc.*, c.name as client_name
+                FROM client_context cc
+                JOIN clients c ON cc.client_id = c.id
+                WHERE cc.id = %s
+            """, (context_id,))
+            return cursor.fetchone()
+
+    def list_client_context(self, client_id: int) -> List[Dict]:
+        """
+        List all context documents for a client.
+
+        Returns list with id, title, context_type, created_at (no content for efficiency).
+        """
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT id, title, context_type, source_url, created_at, updated_at
+                FROM client_context
+                WHERE client_id = %s
+                ORDER BY updated_at DESC
+            """, (client_id,))
+            return cursor.fetchall()
+
+    def search_client_context(
+        self,
+        query: str,
+        client_id: Optional[int] = None,
+        limit: int = 10
+    ) -> List[Dict]:
+        """
+        Full-text search across client context documents.
+
+        Args:
+            query: Search query
+            client_id: Optional filter by client
+            limit: Maximum results
+
+        Returns:
+            List of matching context documents with relevance rank
+        """
+        with self.get_cursor() as cursor:
+            if client_id:
+                cursor.execute("""
+                    SELECT cc.id, cc.title, cc.context_type, cc.client_id,
+                           c.name as client_name,
+                           substring(cc.content, 1, 300) as content_preview,
+                           ts_rank(
+                               to_tsvector('english', COALESCE(cc.title, '') || ' ' || COALESCE(cc.content, '')),
+                               plainto_tsquery('english', %s)
+                           ) as rank
+                    FROM client_context cc
+                    JOIN clients c ON cc.client_id = c.id
+                    WHERE cc.client_id = %s
+                      AND to_tsvector('english', COALESCE(cc.title, '') || ' ' || COALESCE(cc.content, ''))
+                          @@ plainto_tsquery('english', %s)
+                    ORDER BY rank DESC
+                    LIMIT %s
+                """, (query, client_id, query, limit))
+            else:
+                cursor.execute("""
+                    SELECT cc.id, cc.title, cc.context_type, cc.client_id,
+                           c.name as client_name,
+                           substring(cc.content, 1, 300) as content_preview,
+                           ts_rank(
+                               to_tsvector('english', COALESCE(cc.title, '') || ' ' || COALESCE(cc.content, '')),
+                               plainto_tsquery('english', %s)
+                           ) as rank
+                    FROM client_context cc
+                    JOIN clients c ON cc.client_id = c.id
+                    WHERE to_tsvector('english', COALESCE(cc.title, '') || ' ' || COALESCE(cc.content, ''))
+                          @@ plainto_tsquery('english', %s)
+                    ORDER BY rank DESC
+                    LIMIT %s
+                """, (query, query, limit))
+            return cursor.fetchall()
+
+    def update_client_context(
+        self,
+        context_id: int,
+        title: Optional[str] = None,
+        content: Optional[str] = None,
+        context_type: Optional[str] = None,
+        source_url: Optional[str] = None
+    ) -> bool:
+        """
+        Update a context document.
+
+        Args:
+            context_id: ID of the context to update
+            title: New title (if provided)
+            content: New content (if provided)
+            context_type: New type (if provided)
+            source_url: New URL (if provided)
+
+        Returns:
+            True if update was successful
+        """
+        updates = []
+        params = []
+
+        if title is not None:
+            updates.append("title = %s")
+            params.append(title)
+        if content is not None:
+            updates.append("content = %s")
+            params.append(content)
+        if context_type is not None:
+            updates.append("context_type = %s")
+            params.append(context_type)
+        if source_url is not None:
+            updates.append("source_url = %s")
+            params.append(source_url)
+
+        if not updates:
+            return False
+
+        updates.append("updated_at = NOW()")
+        params.append(context_id)
+
+        with self.get_cursor() as cursor:
+            cursor.execute(f"""
+                UPDATE client_context
+                SET {', '.join(updates)}
+                WHERE id = %s
+            """, params)
+            return cursor.rowcount > 0
+
+    def delete_client_context(self, context_id: int) -> bool:
+        """Delete a context document."""
+        with self.get_cursor() as cursor:
+            cursor.execute("DELETE FROM client_context WHERE id = %s", (context_id,))
+            return cursor.rowcount > 0
+
 
 def get_database_manager() -> Optional[DatabaseManager]:
     """

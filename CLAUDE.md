@@ -133,11 +133,3 @@ Located at `~/Library/Application Support/Claude/claude_desktop_config.json`:
   }
 }
 ```
-
-## Common Issues
-
-**"uv: not found"** - The run_server.sh uses the full path to uv at `/Users/tkaiser/.local/bin/uv`. Update if uv is installed elsewhere.
-
-**"No module named X"** - Add the dependency to `mcp_server/pyproject.toml` and run `uv sync`.
-
-**"database does not exist"** - Run `createdb cereal` then `psql cereal < scripts/setup_database.sql`.

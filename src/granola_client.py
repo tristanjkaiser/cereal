@@ -452,3 +452,34 @@ class GranolaClient:
             'manual_notes': manual_notes,
             'combined_markdown': combined_markdown
         }
+
+    def get_document_attendees(self, document: Dict) -> List[Dict]:
+        """
+        Extract attendee list with email and company info from a document.
+
+        Args:
+            document: Document dictionary from API
+
+        Returns:
+            List of attendee dicts with 'email' and 'company' keys
+        """
+        attendees = []
+        people = document.get('people', {})
+
+        if not people:
+            return attendees
+
+        raw_attendees = people.get('attendees', [])
+
+        for att in raw_attendees:
+            email = att.get('email', '')
+            details = att.get('details', {})
+            company_info = details.get('company', {})
+            company_name = company_info.get('name') if company_info else None
+
+            attendees.append({
+                'email': email,
+                'company': company_name
+            })
+
+        return attendees

@@ -89,3 +89,14 @@ CREATE INDEX IF NOT EXISTS idx_client_context_type ON client_context(context_typ
 -- Full-text search on client context
 CREATE INDEX IF NOT EXISTS idx_client_context_fts ON client_context
     USING gin(to_tsvector('english', COALESCE(title, '') || ' ' || COALESCE(content, '')));
+
+-- Client aliases for name normalization (e.g., "NB44 - Intuit" → "NB44")
+CREATE TABLE IF NOT EXISTS client_aliases (
+    id SERIAL PRIMARY KEY,
+    alias VARCHAR(255) NOT NULL UNIQUE,  -- The alternate name to recognize
+    canonical_client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_client_aliases_alias ON client_aliases(alias);
+CREATE INDEX IF NOT EXISTS idx_client_aliases_client ON client_aliases(canonical_client_id);

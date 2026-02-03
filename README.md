@@ -10,7 +10,7 @@ Query your [Granola](https://granola.ai) meeting transcripts directly from Claud
 - **Query by client** - find all meetings with a specific client
 - **Full transcripts** - get complete meeting details on demand
 - **Archive from Claude** - tell Claude to "archive my recent meetings"
-- **Client management** - auto-detect clients from meeting titles
+- **Auto-client detection** - automatically assigns clients based on meeting titles and attendees
 - **Client context** - store PRDs, estimates, and other docs per client
 
 ## Prerequisites
@@ -85,7 +85,7 @@ Ask Claude: "Archive my recent meetings from Granola"
 
 | Tool | Description |
 |------|-------------|
-| `archive_new_meetings` | Archive new meetings from Granola |
+| `archive_new_meetings` | Archive new meetings from Granola (auto-detects clients) |
 | `list_clients` | List all clients with meeting counts |
 | `list_recent_meetings` | Get meetings from last N days |
 | `get_client_meetings` | Get all meetings for a client |
@@ -106,6 +106,16 @@ Ask Claude: "Archive my recent meetings from Granola"
 | `update_client_context` | Update an existing context doc |
 | `delete_client_context` | Delete a context doc |
 
+### Client Management Tools
+
+| Tool | Description |
+|------|-------------|
+| `merge_clients` | Merge duplicate clients (e.g., "NB44 - Intuit" → "NB44") |
+| `rename_client` | Rename a client and create alias for old name |
+| `add_client_alias` | Add alias without merging |
+| `list_client_aliases` | Show all configured aliases |
+| `delete_client_alias` | Remove an alias |
+
 ## Example Conversations
 
 Once configured, you can ask Claude things like:
@@ -122,6 +132,12 @@ Once configured, you can ask Claude things like:
 - "What context docs do we have for Mothership?"
 - "Search client docs for pricing requirements"
 - "Update the NGynS estimate with the latest numbers"
+
+**Client Management:**
+- "Merge 'NB44 - Intuit' into 'NB44'" - consolidates duplicates
+- "Rename 'Acme Corp' to 'Acme'" - renames with alias
+- "Add an alias 'Project X' for client 'Mothership'"
+- "Show me all client aliases"
 
 ## Project Structure
 
@@ -146,6 +162,22 @@ cereal/
 2. **Cereal** fetches transcripts via Granola's local API
 3. Meetings are archived to **PostgreSQL** with full-text search
 4. **Claude** queries your archive via MCP tools
+
+## Auto-Client Detection
+
+When archiving meetings, Cereal automatically detects and assigns clients using:
+
+1. **Client aliases** (highest priority) - User-defined mappings like "NB44 - Intuit" → "NB44"
+2. **Known client match** - If an existing client name appears in the title
+3. **Title patterns** - Extracts client from patterns like:
+   - `NGynS x Goji Design Check-in` → NGynS
+   - `GS1: Review Next Cycle` → GS1
+   - `Record NB44 admin tool` → NB44
+4. **External attendees** - Uses company info from non-internal attendees
+
+New clients are created automatically when detected. Internal meetings (no external attendees or client patterns) remain unassigned.
+
+Configure the internal domain via `INTERNAL_DOMAIN` env var (default: `gojilabs.com`).
 
 ## License
 

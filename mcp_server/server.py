@@ -15,10 +15,11 @@ Usage:
 import json
 import logging
 import os
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 # Set up logging to file for debugging
 log_dir = Path(__file__).parent.parent / "logs"
@@ -75,6 +76,73 @@ def get_db() -> DatabaseManager:
         _db = DatabaseManager(database_url)
         logger.info("Database connected successfully")
     return _db
+
+
+# Internal domain for detecting external attendees
+INTERNAL_DOMAIN = os.getenv("INTERNAL_DOMAIN", "gojilabs.com")
+
+
+def detect_client_from_meeting(
+    title: str,
+    attendees: List[dict],
+    known_clients: List[str],
+    aliases: Optional[dict] = None
+) -> Optional[str]:
+    """
+    Detect client from meeting title and attendee data.
+
+    Detection priority:
+    0. Alias match (highest priority - user-defined mappings)
+    1. Known client name appears in title
+    2. Title patterns like "Client x Goji", "Client:", "Record Client"
+    3. External attendee company name (if only one external company)
+
+    Args:
+        title: Meeting title
+        attendees: List of attendee dicts with 'email' and 'company' keys
+        known_clients: List of known client names from database
+        aliases: Dict mapping alias (lowercase) → canonical client name
+
+    Returns:
+        Client name if detected, None otherwise
+    """
+    title_lower = title.lower()
+
+    # 0. Check aliases FIRST (highest priority - user-defined mappings)
+    if aliases:
+        for alias, canonical in aliases.items():
+            if alias in title_lower:
+                return canonical
+
+    # 1. Known client match (case-insensitive)
+    for client in known_clients:
+        if client.lower() in title_lower:
+            return client
+
+    # 2. Title pattern extraction
+    patterns = [
+        r'^([A-Za-z0-9]+)\s+x\s+Goji',       # "NGynS x Goji"
+        r'^([A-Za-z0-9]+):',                  # "GS1: ..."
+        r'^Record\s+([A-Za-z0-9]+)',          # "Record NB44 ..."
+    ]
+    for pattern in patterns:
+        match = re.match(pattern, title, re.IGNORECASE)
+        if match:
+            return match.group(1)
+
+    # 3. External attendee detection
+    external_companies = set()
+    for att in attendees:
+        email = att.get('email', '')
+        if email and not email.endswith(f'@{INTERNAL_DOMAIN}'):
+            company = att.get('company')
+            if company and company.lower() not in ['unknown', 'goji labs', 'gojilabs']:
+                external_companies.add(company)
+
+    if len(external_companies) == 1:
+        return external_companies.pop()
+
+    return None
 
 
 def format_meeting_summary(meeting: dict) -> str:
@@ -331,13 +399,14 @@ def archive_new_meetings(limit: int = 50) -> str:
     """Archive new meetings from Granola to the database.
 
     Fetches recent meetings from Granola and archives any that aren't
-    already in the database. Use this to sync your latest meetings.
+    already in the database. Automatically detects and assigns clients
+    based on meeting titles and attendee data.
 
     Args:
         limit: Maximum number of meetings to check (default 50)
 
     Returns:
-        Summary of what was archived.
+        Summary of what was archived with client detection results.
     """
     logger.info(f"archive_new_meetings called with limit={limit}")
 
@@ -350,6 +419,22 @@ def archive_new_meetings(limit: int = 50) -> str:
     except Exception as e:
         logger.exception(f"Error querying archived IDs: {e}")
         return f"Error querying database: {e}"
+
+    # Get known client names for matching
+    try:
+        known_clients = db.get_client_names()
+        logger.info(f"Found {len(known_clients)} known clients for matching")
+    except Exception as e:
+        logger.exception(f"Error fetching client names: {e}")
+        known_clients = []
+
+    # Get client aliases for matching
+    try:
+        aliases = db.get_client_aliases()
+        logger.info(f"Found {len(aliases)} client aliases for matching")
+    except Exception as e:
+        logger.exception(f"Error fetching client aliases: {e}")
+        aliases = {}
 
     # Initialize Granola client
     try:
@@ -377,9 +462,10 @@ def archive_new_meetings(limit: int = 50) -> str:
     if not new_documents:
         return f"All {len(documents)} recent meetings are already archived. Nothing new to add."
 
-    # Archive each new meeting
+    # Archive each new meeting with auto-client detection
     archived_count = 0
     errors = []
+    archived_details = []  # Track what was archived with client info
 
     for doc in new_documents:
         doc_id = doc.get('id') or doc.get('document_id')
@@ -390,7 +476,26 @@ def archive_new_meetings(limit: int = 50) -> str:
             # Get content parts
             content = granola.get_document_content_parts(doc, debug=False)
 
-            # Archive to database
+            # Extract attendees for client detection
+            attendees = granola.get_document_attendees(doc)
+
+            # Detect client from title and attendees
+            detected_client = detect_client_from_meeting(
+                title=title,
+                attendees=attendees,
+                known_clients=known_clients,
+                aliases=aliases
+            )
+
+            # Get or create client ID if detected
+            client_id = None
+            if detected_client:
+                client_id = db.get_or_create_client(detected_client)
+                # Add to known clients for subsequent matches
+                if detected_client not in known_clients:
+                    known_clients.append(detected_client)
+
+            # Archive to database with client
             db.archive_meeting(
                 granola_document_id=doc_id,
                 title=title,
@@ -398,10 +503,15 @@ def archive_new_meetings(limit: int = 50) -> str:
                 transcript=content.get('transcript'),
                 enhanced_notes=content.get('enhanced_notes'),
                 manual_notes=content.get('manual_notes'),
-                combined_markdown=content.get('combined_markdown')
+                combined_markdown=content.get('combined_markdown'),
+                client_id=client_id
             )
             archived_count += 1
-            logger.info(f"Archived: {title[:50]}")
+
+            # Track details for response
+            client_note = f" → {detected_client}" if detected_client else ""
+            archived_details.append(f"- {title[:50]}{client_note}")
+            logger.info(f"Archived: {title[:50]} (client: {detected_client or 'none'})")
 
         except Exception as e:
             logger.exception(f"Error archiving {title}: {e}")
@@ -415,8 +525,12 @@ def archive_new_meetings(limit: int = 50) -> str:
         f"**Newly archived:** {archived_count}",
     ]
 
+    if archived_details:
+        lines.append("\n## Archived Meetings")
+        lines.extend(archived_details)
+
     if errors:
-        lines.append(f"**Errors:** {len(errors)}")
+        lines.append(f"\n**Errors:** {len(errors)}")
         for error in errors[:3]:
             lines.append(f"  - {error}")
 
@@ -628,6 +742,214 @@ def delete_client_context(context_id: int) -> str:
         return f"Deleted '{ctx['title']}' ({ctx['context_type']}) from {ctx['client_name']}."
     else:
         return f"Failed to delete context document {context_id}."
+
+
+# Client Management Tools
+
+@mcp.tool()
+def merge_clients(source_name: str, target_name: str) -> str:
+    """Merge one client into another, reassigning all meetings and context.
+
+    Use this to consolidate duplicate clients (e.g., "NB44 - Intuit" into "NB44").
+    Creates an alias so future auto-detection recognizes the old name.
+
+    Args:
+        source_name: Client to merge FROM (will be deleted)
+        target_name: Client to merge INTO (will be kept)
+
+    Returns:
+        Summary of what was merged and the alias created.
+    """
+    db = get_db()
+
+    # Get source client
+    source = db.get_client_by_name(source_name)
+    if not source:
+        return f"Source client '{source_name}' not found."
+
+    # Get or create target client
+    target = db.get_client_by_name(target_name)
+    if not target:
+        target_id = db.get_or_create_client(target_name)
+    else:
+        target_id = target['id']
+
+    try:
+        result = db.merge_clients(source['id'], target_id)
+
+        lines = [
+            f"# Merged \"{source_name}\" into \"{target_name}\"\n",
+            f"- Reassigned {result['meetings_moved']} meetings",
+            f"- Reassigned {result['context_moved']} context documents",
+            f"- Created alias: \"{source_name}\" → \"{target_name}\"",
+            f"- Deleted client \"{source_name}\"",
+            "",
+            f"Future meetings mentioning \"{source_name}\" will be assigned to \"{target_name}\"."
+        ]
+        return "\n".join(lines)
+
+    except Exception as e:
+        logger.exception(f"Error merging clients: {e}")
+        return f"Error merging clients: {e}"
+
+
+@mcp.tool()
+def rename_client(old_name: str, new_name: str) -> str:
+    """Rename a client and create an alias for the old name.
+
+    Future auto-detection will recognize both names and map to the new name.
+
+    Args:
+        old_name: Current client name
+        new_name: New name for the client
+
+    Returns:
+        Confirmation of the rename.
+    """
+    db = get_db()
+
+    client = db.get_client_by_name(old_name)
+    if not client:
+        return f"Client '{old_name}' not found."
+
+    # Check if new name already exists
+    existing = db.get_client_by_name(new_name)
+    if existing:
+        return f"Client '{new_name}' already exists. Use merge_clients instead."
+
+    success = db.rename_client(client['id'], new_name)
+
+    if success:
+        return (
+            f"Renamed \"{old_name}\" to \"{new_name}\".\n"
+            f"Created alias: \"{old_name}\" → \"{new_name}\""
+        )
+    else:
+        return f"Failed to rename client '{old_name}'."
+
+
+@mcp.tool()
+def add_client_alias(alias: str, client_name: str) -> str:
+    """Add an alias that maps to an existing client.
+
+    Future auto-detection will treat the alias as the client name.
+    Use this to teach the system alternate names without merging.
+
+    Args:
+        alias: The alternate name to recognize (e.g., "Acme Corp")
+        client_name: The canonical client name to map to (e.g., "Acme")
+
+    Returns:
+        Confirmation of the alias creation.
+    """
+    db = get_db()
+
+    client = db.get_client_by_name(client_name)
+    if not client:
+        return f"Client '{client_name}' not found. Create the client first."
+
+    db.add_client_alias(alias, client['id'])
+
+    return (
+        f"Created alias: \"{alias}\" → \"{client_name}\"\n"
+        f"Future meetings mentioning \"{alias}\" will be assigned to \"{client_name}\"."
+    )
+
+
+@mcp.tool()
+def list_client_aliases(client_name: str = None) -> str:
+    """List all client aliases, optionally filtered by client.
+
+    Args:
+        client_name: Optional - show aliases for this client only
+
+    Returns:
+        List of configured aliases.
+    """
+    db = get_db()
+
+    if client_name:
+        client = db.get_client_by_name(client_name)
+        if not client:
+            return f"Client '{client_name}' not found."
+
+        aliases = db.get_aliases_for_client(client['id'])
+        if not aliases:
+            return f"No aliases configured for '{client_name}'."
+
+        lines = [f"# Aliases for {client_name}\n"]
+        for alias in aliases:
+            lines.append(f"- \"{alias}\" → \"{client_name}\"")
+        return "\n".join(lines)
+
+    else:
+        aliases = db.get_client_aliases()
+        if not aliases:
+            return "No aliases configured."
+
+        lines = ["# All Client Aliases\n"]
+        for alias, canonical in sorted(aliases.items()):
+            lines.append(f"- \"{alias}\" → \"{canonical}\"")
+        return "\n".join(lines)
+
+
+@mcp.tool()
+def delete_client_alias(alias: str) -> str:
+    """Delete a client alias.
+
+    Args:
+        alias: The alias to remove
+
+    Returns:
+        Confirmation of deletion.
+    """
+    db = get_db()
+
+    success = db.delete_client_alias(alias)
+
+    if success:
+        return f"Deleted alias \"{alias}\"."
+    else:
+        return f"Alias \"{alias}\" not found."
+
+
+@mcp.tool()
+def assign_meeting_to_client(meeting_id: int, client_name: str) -> str:
+    """Assign a meeting to a client.
+
+    Use this to manually associate a meeting with a client when
+    auto-detection didn't work or the meeting was archived without a client.
+
+    Args:
+        meeting_id: Database ID of the meeting (shown in brackets in listings)
+        client_name: Name of the client to assign to
+
+    Returns:
+        Confirmation of the assignment.
+    """
+    db = get_db()
+
+    # Verify meeting exists
+    meeting = db.get_meeting_by_id(meeting_id)
+    if not meeting:
+        return f"Meeting with ID {meeting_id} not found."
+
+    # Get or create client
+    client = db.get_client_by_name(client_name)
+    if not client:
+        client_id = db.get_or_create_client(client_name)
+    else:
+        client_id = client['id']
+
+    # Assign the meeting
+    success = db.assign_meeting_to_client(meeting_id, client_id)
+
+    if success:
+        return (
+            f"Assigned meeting [{meeting_id}] \"{meeting['title']}\" to {client_name}."
+        )
+    else:
+        return f"Failed to assign meeting {meeting_id}."
 
 
 if __name__ == "__main__":

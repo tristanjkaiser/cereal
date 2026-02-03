@@ -305,6 +305,175 @@ class DatabaseManager:
             cursor.execute("SELECT * FROM clients ORDER BY name")
             return cursor.fetchall()
 
+    def get_client_names(self) -> List[str]:
+        """Get list of all client names for matching."""
+        with self.get_cursor() as cursor:
+            cursor.execute("SELECT name FROM clients ORDER BY name")
+            return [row['name'] for row in cursor.fetchall()]
+
+    # Client alias methods
+
+    def add_client_alias(self, alias: str, client_id: int) -> int:
+        """
+        Add an alias that maps to a client.
+
+        Args:
+            alias: The alternate name to recognize
+            client_id: The canonical client ID to map to
+
+        Returns:
+            The database ID of the created alias
+        """
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO client_aliases (alias, canonical_client_id)
+                VALUES (%s, %s)
+                ON CONFLICT (alias) DO UPDATE SET canonical_client_id = EXCLUDED.canonical_client_id
+                RETURNING id
+            """, (alias.lower(), client_id))
+            result = cursor.fetchone()
+            return result['id'] if result else None
+
+    def get_client_aliases(self) -> Dict[str, str]:
+        """
+        Get all client aliases as a mapping.
+
+        Returns:
+            Dict mapping alias (lowercase) → canonical client name
+        """
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT ca.alias, c.name as canonical_name
+                FROM client_aliases ca
+                JOIN clients c ON ca.canonical_client_id = c.id
+                ORDER BY ca.alias
+            """)
+            return {row['alias']: row['canonical_name'] for row in cursor.fetchall()}
+
+    def get_aliases_for_client(self, client_id: int) -> List[str]:
+        """Get all aliases for a specific client."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT alias FROM client_aliases
+                WHERE canonical_client_id = %s
+                ORDER BY alias
+            """, (client_id,))
+            return [row['alias'] for row in cursor.fetchall()]
+
+    def delete_client_alias(self, alias: str) -> bool:
+        """Delete a client alias."""
+        with self.get_cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM client_aliases WHERE alias = %s",
+                (alias.lower(),)
+            )
+            return cursor.rowcount > 0
+
+    def rename_client(self, client_id: int, new_name: str) -> bool:
+        """
+        Rename a client and create an alias for the old name.
+
+        Args:
+            client_id: The client to rename
+            new_name: The new name for the client
+
+        Returns:
+            True if successful
+        """
+        with self.get_cursor() as cursor:
+            # Get the old name first
+            cursor.execute("SELECT name FROM clients WHERE id = %s", (client_id,))
+            result = cursor.fetchone()
+            if not result:
+                return False
+
+            old_name = result['name']
+
+            # Update the client name
+            cursor.execute(
+                "UPDATE clients SET name = %s WHERE id = %s",
+                (new_name, client_id)
+            )
+
+            # Create alias for old name → new client
+            cursor.execute("""
+                INSERT INTO client_aliases (alias, canonical_client_id)
+                VALUES (%s, %s)
+                ON CONFLICT (alias) DO UPDATE SET canonical_client_id = EXCLUDED.canonical_client_id
+            """, (old_name.lower(), client_id))
+
+            return True
+
+    def merge_clients(self, source_id: int, target_id: int) -> Dict[str, int]:
+        """
+        Merge source client into target client.
+
+        Reassigns all meetings and context from source to target,
+        creates an alias, and deletes the source client.
+
+        Args:
+            source_id: Client to merge FROM (will be deleted)
+            target_id: Client to merge INTO (will be kept)
+
+        Returns:
+            Dict with counts: meetings_moved, context_moved
+        """
+        with self.get_cursor() as cursor:
+            # Get source client name for alias
+            cursor.execute("SELECT name FROM clients WHERE id = %s", (source_id,))
+            source = cursor.fetchone()
+            if not source:
+                raise ValueError(f"Source client {source_id} not found")
+
+            source_name = source['name']
+
+            # Reassign meetings
+            cursor.execute(
+                "UPDATE meetings SET client_id = %s WHERE client_id = %s",
+                (target_id, source_id)
+            )
+            meetings_moved = cursor.rowcount
+
+            # Reassign client context
+            cursor.execute(
+                "UPDATE client_context SET client_id = %s WHERE client_id = %s",
+                (target_id, source_id)
+            )
+            context_moved = cursor.rowcount
+
+            # Create alias for source name → target
+            cursor.execute("""
+                INSERT INTO client_aliases (alias, canonical_client_id)
+                VALUES (%s, %s)
+                ON CONFLICT (alias) DO UPDATE SET canonical_client_id = EXCLUDED.canonical_client_id
+            """, (source_name.lower(), target_id))
+
+            # Delete source client (cascade will delete any remaining aliases)
+            cursor.execute("DELETE FROM clients WHERE id = %s", (source_id,))
+
+            return {
+                'meetings_moved': meetings_moved,
+                'context_moved': context_moved
+            }
+
+    def assign_meeting_to_client(self, meeting_id: int, client_id: Optional[int]) -> bool:
+        """
+        Assign a meeting to a client (or unassign if client_id is None).
+
+        Args:
+            meeting_id: The meeting to update
+            client_id: The client to assign to (or None to unassign)
+
+        Returns:
+            True if the meeting was found and updated
+        """
+        with self.get_cursor() as cursor:
+            cursor.execute(
+                "UPDATE meetings SET client_id = %s WHERE id = %s",
+                (client_id, meeting_id)
+            )
+            return cursor.rowcount > 0
+
     # Meeting series management methods
 
     def create_meeting_series(

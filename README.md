@@ -12,6 +12,7 @@ Query your [Granola](https://granola.ai) meeting transcripts directly from Claud
 - **Archive from Claude** - tell Claude to "archive my recent meetings"
 - **Auto-client detection** - automatically assigns clients based on meeting titles and attendees
 - **Client context** - store PRDs, estimates, and other docs per client
+- **Linear integration** - pair with Linear MCP for project/issue context
 
 ## Prerequisites
 
@@ -94,6 +95,7 @@ Ask Claude: "Archive my recent meetings from Granola"
 | `get_meeting_transcript` | Get full transcript |
 | `find_meeting_by_title` | Find meetings by title |
 | `get_meeting_stats` | Archive statistics |
+| `assign_meeting_to_client` | Manually assign a meeting to a client |
 
 ### Client Context Tools
 
@@ -178,6 +180,56 @@ When archiving meetings, Cereal automatically detects and assigns clients using:
 New clients are created automatically when detected. Internal meetings (no external attendees or client patterns) remain unassigned.
 
 Configure the internal domain via `INTERNAL_DOMAIN` env var (default: `gojilabs.com`).
+
+## Linear Integration (Optional)
+
+Pair Cereal with [Linear's official MCP server](https://linear.app/docs/mcp-server) for project/issue context alongside meeting notes.
+
+### Setup
+
+Add Linear to your Claude Desktop config:
+
+```json
+{
+  "mcpServers": {
+    "cereal": {
+      "command": "/path/to/cereal/mcp_server/run_server.sh",
+      "env": {
+        "DATABASE_URL": "postgresql://localhost:5432/cereal"
+      }
+    },
+    "linear": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://mcp.linear.app/sse"]
+    }
+  }
+}
+```
+
+After restarting Claude Desktop, ask Claude to "Authenticate with Linear" to complete the OAuth flow.
+
+### What Linear MCP Provides
+
+- `list_issues` - Filter by team, project, assignee, state
+- `get_issue` - Detailed issue info with attachments
+- `create_issue`, `update_issue` - Manage issues
+- `list_projects`, `get_project` - Project details
+- `list_teams` - All your Linear teams
+- `post_comment` - Add comments to issues
+
+### Combined Workflow
+
+Claude uses both MCPs together for meeting preparation:
+
+1. "What's on the agenda for my NGynS meeting?"
+2. Claude calls Cereal: `get_client_meetings("NGynS")` → finds recent meetings
+3. Claude calls Linear: `list_issues(team: "NGynS")` → finds open issues
+4. Claude synthesizes both to suggest agenda items
+
+**Example prompts:**
+- "What should I discuss in my Mothership meeting tomorrow?"
+- "What issues are blocking the NGynS launch?"
+- "Summarize last week's progress on Project X"
 
 ## License
 

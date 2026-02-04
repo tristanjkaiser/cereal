@@ -112,11 +112,20 @@ Ask Claude: "Archive my recent meetings from Granola"
 
 | Tool | Description |
 |------|-------------|
-| `merge_clients` | Merge duplicate clients (e.g., "NB44 - Intuit" → "NB44") |
+| `merge_clients` | Merge duplicate clients (e.g., "ClientB - BigCo" → "ClientB") |
 | `rename_client` | Rename a client and create alias for old name |
 | `add_client_alias` | Add alias without merging |
 | `list_client_aliases` | Show all configured aliases |
 | `delete_client_alias` | Remove an alias |
+
+### Integration Tools
+
+| Tool | Description |
+|------|-------------|
+| `link_client_to_linear_team` | Link a client to a Linear team ID |
+| `get_client_linear_team` | Get the Linear team linked to a client |
+| `list_integration_status` | Show all clients with their Linear mappings |
+| `unlink_client_integration` | Remove a client's Linear team link |
 
 ## Example Conversations
 
@@ -130,16 +139,22 @@ Once configured, you can ask Claude things like:
 - "Get the transcript for meeting ID 42"
 
 **Client Context:**
-- "Save this PRD for NGynS: [paste content]"
-- "What context docs do we have for Mothership?"
+- "Save this PRD for ClientA: [paste content]"
+- "What context docs do we have for ClientC?"
 - "Search client docs for pricing requirements"
-- "Update the NGynS estimate with the latest numbers"
+- "Update the ClientA estimate with the latest numbers"
 
 **Client Management:**
-- "Merge 'NB44 - Intuit' into 'NB44'" - consolidates duplicates
-- "Rename 'Acme Corp' to 'Acme'" - renames with alias
-- "Add an alias 'Project X' for client 'Mothership'"
+- "Merge 'ClientB - BigCo' into 'ClientB'" - consolidates duplicates
+- "Rename 'ClientE Corp' to 'ClientE'" - renames with alias
+- "Add an alias 'Project Alpha' for client 'ClientC'"
 - "Show me all client aliases"
+
+**Linear Integration:**
+- "Help me map my clients to Linear teams"
+- "Link client ClientA to Linear team [team_id]"
+- "Show me integration status for all clients"
+- "What Linear team is ClientC linked to?"
 
 ## Project Structure
 
@@ -169,12 +184,12 @@ cereal/
 
 When archiving meetings, Cereal automatically detects and assigns clients using:
 
-1. **Client aliases** (highest priority) - User-defined mappings like "NB44 - Intuit" → "NB44"
+1. **Client aliases** (highest priority) - User-defined mappings like "ClientB - BigCo" → "ClientB"
 2. **Known client match** - If an existing client name appears in the title
 3. **Title patterns** - Extracts client from patterns like:
-   - `NGynS x Goji Design Check-in` → NGynS
-   - `GS1: Review Next Cycle` → GS1
-   - `Record NB44 admin tool` → NB44
+   - `ClientA x Goji Design Check-in` → ClientA
+   - `ClientD: Review Next Cycle` → ClientD
+   - `Record ClientB admin tool` → ClientB
 4. **External attendees** - Uses company info from non-internal attendees
 
 New clients are created automatically when detected. Internal meetings (no external attendees or client patterns) remain unassigned.
@@ -217,19 +232,31 @@ After restarting Claude Desktop, ask Claude to "Authenticate with Linear" to com
 - `list_teams` - All your Linear teams
 - `post_comment` - Add comments to issues
 
+### Linking Clients to Linear Teams
+
+For reliable cross-system correlation, link your Cereal clients to Linear teams:
+
+```
+"Link client ClientA to Linear team team_abc123"
+"Show me integration status for all clients"
+```
+
+This stores the mapping in Cereal's database, so Claude can reliably match data even when names differ (e.g., "ClientA" in Cereal vs "ClientA Engineering" in Linear).
+
 ### Combined Workflow
 
 Claude uses both MCPs together for meeting preparation:
 
-1. "What's on the agenda for my NGynS meeting?"
-2. Claude calls Cereal: `get_client_meetings("NGynS")` → finds recent meetings
-3. Claude calls Linear: `list_issues(team: "NGynS")` → finds open issues
+1. "What's on the agenda for my ClientA meeting?"
+2. Claude calls Cereal: `get_client_meetings("ClientA")` → finds recent meetings
+3. Claude calls Linear: `list_issues(team: "ClientA")` → finds open issues
 4. Claude synthesizes both to suggest agenda items
 
 **Example prompts:**
-- "What should I discuss in my Mothership meeting tomorrow?"
-- "What issues are blocking the NGynS launch?"
-- "Summarize last week's progress on Project X"
+- "What should I discuss in my ClientA meeting tomorrow?"
+- "What issues are blocking the ClientB launch?"
+- "Summarize last week's progress on Project Alpha"
+- "Help me map my clients to Linear teams"
 
 ## License
 

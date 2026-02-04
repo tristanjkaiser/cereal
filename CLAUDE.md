@@ -39,7 +39,7 @@ Granola (local app) → GranolaClient → PostgreSQL ← MCP Server → Claude D
 
 ## Database Schema
 
-Five tables: `clients`, `meeting_series`, `meetings`, `client_context`, `client_aliases`
+Six tables: `clients`, `meeting_series`, `meetings`, `client_context`, `client_aliases`, `client_integrations`
 
 The `meetings` table stores:
 - `granola_document_id` - unique ID from Granola
@@ -57,8 +57,14 @@ The `client_context` table stores:
 - `source_url` - optional link to original doc
 
 The `client_aliases` table stores:
-- `alias` - alternate name to recognize (e.g., "NB44 - Intuit")
+- `alias` - alternate name to recognize (e.g., "ClientB - BigCo")
 - `canonical_client_id` - the client this alias maps to
+
+The `client_integrations` table stores:
+- `client_id` - foreign key to clients
+- `integration_type` - type of integration ('linear_team', 'slack_channel', etc.)
+- `external_id` - ID in the external system (e.g., Linear team ID)
+- `external_name` - human-readable name in external system
 
 Full-text search indexes exist on transcript, notes, summary, and context fields.
 
@@ -103,6 +109,7 @@ The server exposes these tools to Claude:
 | `get_meeting_transcript` | Get full transcript (by ID) |
 | `find_meeting_by_title` | Search meetings by title |
 | `get_meeting_stats` | Archive statistics |
+| `assign_meeting_to_client` | Manually assign a meeting to a client |
 
 ### Client Context Tools
 
@@ -125,11 +132,37 @@ The server exposes these tools to Claude:
 | `list_client_aliases` | Show all configured aliases |
 | `delete_client_alias` | Remove an alias |
 
-**Example:** Merge "NB44 - Intuit" into "NB44":
+**Example:** Merge "ClientB - BigCo" into "ClientB":
 ```
-merge_clients("NB44 - Intuit", "NB44")
+merge_clients("ClientB - BigCo", "ClientB")
 ```
-This reassigns all meetings/context and creates an alias so future archival recognizes "NB44 - Intuit" as "NB44".
+This reassigns all meetings/context and creates an alias so future archival recognizes "ClientB - BigCo" as "ClientB".
+
+### Integration Tools
+
+| Tool | Description |
+|------|-------------|
+| `link_client_to_linear_team` | Link a client to a Linear team ID |
+| `get_client_linear_team` | Get the Linear team linked to a client |
+| `list_integration_status` | Show all clients with their Linear mappings |
+| `unlink_client_integration` | Remove a client's Linear team link |
+
+**Example:** Link a client to Linear team:
+```
+link_client_to_linear_team("ClientA", "team_abc123", "ClientA Engineering")
+```
+This stores the mapping so Claude can reliably correlate data even when names differ.
+
+**Key functions:**
+- `set_client_integration()` in [database.py](src/database.py) - creates/updates integration
+- `get_client_by_integration()` in [database.py](src/database.py) - reverse lookup by external ID
+- `list_client_integrations()` in [database.py](src/database.py) - list all integrations
+
+**Workflow for mapping clients to Linear teams:**
+1. Claude calls Linear MCP `list_teams` → gets all Linear teams
+2. Claude calls Cereal `list_integration_status` → gets clients + existing mappings
+3. Claude compares names and suggests matches
+4. User confirms, Claude calls `link_client_to_linear_team()`
 
 ## Development
 
@@ -174,7 +207,13 @@ Located at `~/Library/Application Support/Claude/claude_desktop_config.json`:
       "env": {
         "DATABASE_URL": "postgresql://localhost:5432/cereal"
       }
+    },
+    "linear": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://mcp.linear.app/sse"]
     }
   }
 }
 ```
+
+The Linear MCP is optional but recommended for project/issue correlation with clients.

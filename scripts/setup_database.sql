@@ -100,3 +100,19 @@ CREATE TABLE IF NOT EXISTS client_aliases (
 
 CREATE INDEX IF NOT EXISTS idx_client_aliases_alias ON client_aliases(alias);
 CREATE INDEX IF NOT EXISTS idx_client_aliases_client ON client_aliases(canonical_client_id);
+
+-- External system integrations (Linear teams, Slack channels, GitHub repos, etc.)
+CREATE TABLE IF NOT EXISTS client_integrations (
+    id SERIAL PRIMARY KEY,
+    client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    integration_type VARCHAR(50) NOT NULL,  -- 'linear_team', 'slack_channel', 'github_repo'
+    external_id VARCHAR(255) NOT NULL,       -- ID in external system
+    external_name VARCHAR(255),              -- Human-readable name
+    created_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(client_id, integration_type),     -- One mapping per type per client
+    UNIQUE(integration_type, external_id)    -- Each external ID maps to one client
+);
+
+CREATE INDEX IF NOT EXISTS idx_client_integrations_client ON client_integrations(client_id);
+CREATE INDEX IF NOT EXISTS idx_client_integrations_type ON client_integrations(integration_type);
+CREATE INDEX IF NOT EXISTS idx_client_integrations_external ON client_integrations(integration_type, external_id);

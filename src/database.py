@@ -474,6 +474,146 @@ class DatabaseManager:
             )
             return cursor.rowcount > 0
 
+    # Client integration methods (Linear teams, Slack channels, etc.)
+
+    def set_client_integration(
+        self,
+        client_id: int,
+        integration_type: str,
+        external_id: str,
+        external_name: Optional[str] = None
+    ) -> int:
+        """
+        Link a client to an external system (Linear team, Slack channel, etc.).
+
+        Args:
+            client_id: The client to link
+            integration_type: Type of integration ('linear_team', 'slack_channel', etc.)
+            external_id: ID in the external system
+            external_name: Human-readable name in external system
+
+        Returns:
+            The database ID of the created integration
+        """
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO client_integrations (client_id, integration_type, external_id, external_name)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (client_id, integration_type) DO UPDATE SET
+                    external_id = EXCLUDED.external_id,
+                    external_name = EXCLUDED.external_name
+                RETURNING id
+            """, (client_id, integration_type, external_id, external_name))
+            result = cursor.fetchone()
+            return result['id'] if result else None
+
+    def get_client_integration(
+        self,
+        client_id: int,
+        integration_type: str
+    ) -> Optional[Dict]:
+        """
+        Get integration for a client by type.
+
+        Args:
+            client_id: The client to look up
+            integration_type: Type of integration ('linear_team', etc.)
+
+        Returns:
+            Integration record or None if not linked
+        """
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT ci.*, c.name as client_name
+                FROM client_integrations ci
+                JOIN clients c ON ci.client_id = c.id
+                WHERE ci.client_id = %s AND ci.integration_type = %s
+            """, (client_id, integration_type))
+            return cursor.fetchone()
+
+    def get_client_by_integration(
+        self,
+        integration_type: str,
+        external_id: str
+    ) -> Optional[Dict]:
+        """
+        Reverse lookup: find client by external system ID.
+
+        Args:
+            integration_type: Type of integration ('linear_team', etc.)
+            external_id: ID in the external system
+
+        Returns:
+            Client record or None if not found
+        """
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT c.*, ci.external_id, ci.external_name
+                FROM clients c
+                JOIN client_integrations ci ON c.id = ci.client_id
+                WHERE ci.integration_type = %s AND ci.external_id = %s
+            """, (integration_type, external_id))
+            return cursor.fetchone()
+
+    def list_client_integrations(
+        self,
+        client_id: Optional[int] = None,
+        integration_type: Optional[str] = None
+    ) -> List[Dict]:
+        """
+        List all integrations, optionally filtered by client or type.
+
+        Args:
+            client_id: Optional filter by client
+            integration_type: Optional filter by type
+
+        Returns:
+            List of integration records with client names
+        """
+        query = """
+            SELECT ci.*, c.name as client_name
+            FROM client_integrations ci
+            JOIN clients c ON ci.client_id = c.id
+            WHERE 1=1
+        """
+        params: List[Any] = []
+
+        if client_id is not None:
+            query += " AND ci.client_id = %s"
+            params.append(client_id)
+
+        if integration_type is not None:
+            query += " AND ci.integration_type = %s"
+            params.append(integration_type)
+
+        query += " ORDER BY c.name, ci.integration_type"
+
+        with self.get_cursor() as cursor:
+            cursor.execute(query, params)
+            return cursor.fetchall()
+
+    def delete_client_integration(
+        self,
+        client_id: int,
+        integration_type: str
+    ) -> bool:
+        """
+        Remove an integration link.
+
+        Args:
+            client_id: The client to unlink
+            integration_type: Type of integration to remove
+
+        Returns:
+            True if the integration was found and deleted
+        """
+        with self.get_cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM client_integrations WHERE client_id = %s AND integration_type = %s",
+                (client_id, integration_type)
+            )
+            return cursor.rowcount > 0
+
     # Meeting series management methods
 
     def create_meeting_series(

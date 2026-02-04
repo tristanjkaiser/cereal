@@ -952,6 +952,173 @@ def assign_meeting_to_client(meeting_id: int, client_name: str) -> str:
         return f"Failed to assign meeting {meeting_id}."
 
 
+# Client Integration Tools (Linear teams, Slack channels, etc.)
+
+@mcp.tool()
+def link_client_to_linear_team(
+    client_name: str,
+    linear_team_id: str,
+    linear_team_name: str = None
+) -> str:
+    """Link a Cereal client to a Linear team for cross-system correlation.
+
+    Use this to establish a mapping between a Cereal client and a Linear team.
+    Once linked, Claude can correlate data across both systems using the ID.
+
+    Args:
+        client_name: Name of the Cereal client
+        linear_team_id: Linear team ID (e.g., "team_abc123")
+        linear_team_name: Optional human-readable team name
+
+    Returns:
+        Confirmation of the link.
+    """
+    db = get_db()
+
+    # Get or create client
+    client = db.get_client_by_name(client_name)
+    if not client:
+        client_id = db.get_or_create_client(client_name)
+    else:
+        client_id = client['id']
+
+    # Check if this Linear team is already linked to another client
+    existing = db.get_client_by_integration('linear_team', linear_team_id)
+    if existing and existing['id'] != client_id:
+        return (
+            f"Linear team '{linear_team_id}' is already linked to client "
+            f"'{existing['name']}'. Unlink it first."
+        )
+
+    # Create the link
+    db.set_client_integration(
+        client_id=client_id,
+        integration_type='linear_team',
+        external_id=linear_team_id,
+        external_name=linear_team_name
+    )
+
+    name_note = f" ({linear_team_name})" if linear_team_name else ""
+    return (
+        f"Linked client \"{client_name}\" to Linear team {linear_team_id}{name_note}.\n"
+        f"Claude can now correlate meetings and issues across both systems."
+    )
+
+
+@mcp.tool()
+def get_client_linear_team(client_name: str) -> str:
+    """Get the Linear team linked to a client.
+
+    Args:
+        client_name: Name of the client
+
+    Returns:
+        Linear team info if linked, or a message if not linked.
+    """
+    db = get_db()
+
+    client = db.get_client_by_name(client_name)
+    if not client:
+        return f"Client '{client_name}' not found."
+
+    integration = db.get_client_integration(client['id'], 'linear_team')
+
+    if not integration:
+        return f"Client '{client_name}' is not linked to a Linear team."
+
+    name_note = f" ({integration['external_name']})" if integration['external_name'] else ""
+    return (
+        f"# Linear Team for {client_name}\n\n"
+        f"**Team ID:** {integration['external_id']}{name_note}\n"
+        f"**Linked:** {integration['created_at'].strftime('%Y-%m-%d')}"
+    )
+
+
+@mcp.tool()
+def list_integration_status() -> str:
+    """Show all clients and their Linear team mappings.
+
+    Lists all clients with their linked Linear teams, plus clients
+    that are not yet linked. Useful for identifying unmapped clients.
+
+    Returns:
+        Status of all client integrations.
+    """
+    db = get_db()
+
+    # Get all clients with meeting counts
+    clients = db.get_clients_with_meeting_counts()
+
+    # Get all Linear team integrations
+    integrations = db.list_client_integrations(integration_type='linear_team')
+    integration_map = {i['client_id']: i for i in integrations}
+
+    linked = []
+    unlinked = []
+
+    for client in clients:
+        integration = integration_map.get(client['id'])
+        if integration:
+            name_note = f" ({integration['external_name']})" if integration['external_name'] else ""
+            linked.append(
+                f"- **{client['name']}** → {integration['external_id']}{name_note} "
+                f"({client['meeting_count']} meetings)"
+            )
+        else:
+            unlinked.append(
+                f"- **{client['name']}** ({client['meeting_count']} meetings)"
+            )
+
+    lines = ["# Client Integration Status\n"]
+
+    if linked:
+        lines.append("## Linked to Linear\n")
+        lines.extend(linked)
+        lines.append("")
+
+    if unlinked:
+        lines.append("## Not Linked\n")
+        lines.extend(unlinked)
+
+    if not linked and not unlinked:
+        lines.append("No clients found.")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def unlink_client_integration(client_name: str, integration_type: str = "linear_team") -> str:
+    """Remove an integration link from a client.
+
+    Args:
+        client_name: Name of the client to unlink
+        integration_type: Type of integration to remove (default: "linear_team")
+
+    Returns:
+        Confirmation of the unlink.
+    """
+    db = get_db()
+
+    client = db.get_client_by_name(client_name)
+    if not client:
+        return f"Client '{client_name}' not found."
+
+    # Check if integration exists
+    integration = db.get_client_integration(client['id'], integration_type)
+    if not integration:
+        return f"Client '{client_name}' is not linked to a {integration_type.replace('_', ' ')}."
+
+    success = db.delete_client_integration(client['id'], integration_type)
+
+    if success:
+        return (
+            f"Unlinked '{client_name}' from {integration_type.replace('_', ' ')} "
+            f"'{integration['external_id']}'."
+        )
+    else:
+        return f"Failed to unlink client '{client_name}'."
+
+
 if __name__ == "__main__":
     logger.info("Starting MCP server...")
     try:

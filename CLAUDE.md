@@ -62,9 +62,10 @@ The `client_aliases` table stores:
 
 The `client_integrations` table stores:
 - `client_id` - foreign key to clients
-- `integration_type` - type of integration ('linear_team', 'slack_channel', etc.)
-- `external_id` - ID in the external system (e.g., Linear team ID)
+- `integration_type` - type of integration ('linear_team', 'slack', etc.)
+- `external_id` - ID in the external system (e.g., Linear team ID, Slack internal channel ID)
 - `external_name` - human-readable name in external system
+- `metadata` - JSONB for additional structured data (e.g., `{"team_key": "WANDER"}` for Linear, `{"external_channel_id": "..."}` for Slack)
 
 Full-text search indexes exist on transcript, notes, summary, and context fields.
 
@@ -142,19 +143,28 @@ This reassigns all meetings/context and creates an alias so future archival reco
 
 | Tool | Description |
 |------|-------------|
-| `link_client_to_linear_team` | Link a client to a Linear team ID |
+| `link_client_to_linear_team` | Link a client to a Linear team ID, name, and key |
 | `get_client_linear_team` | Get the Linear team linked to a client |
-| `list_integration_status` | Show all clients with their Linear mappings |
-| `unlink_client_integration` | Remove a client's Linear team link |
+| `link_client_to_slack` | Link a client to internal (and optional external) Slack channels |
+| `get_client_slack` | Get the Slack channels linked to a client |
+| `get_client_config` | Get all integration data for a client in one call |
+| `list_integration_status` | Show all clients with their integration mappings |
+| `unlink_client_integration` | Remove a client's integration link |
 
 **Example:** Link a client to Linear team:
 ```
-link_client_to_linear_team("ClientA", "team_abc123", "ClientA Engineering")
+link_client_to_linear_team("ClientA", "team_abc123", "ClientA Engineering", "CLNT")
 ```
-This stores the mapping so Claude can reliably correlate data even when names differ.
+This stores the team ID, display name, and key prefix (used in issue IDs like `CLNT-123`).
+
+**Example:** Link a client to Slack channels:
+```
+link_client_to_slack("ClientA", "C0A20JC8A3V", "C08029VUGS0")
+```
+First arg is the internal channel ID, second (optional) is the external/client-facing channel.
 
 **Key functions:**
-- `set_client_integration()` in [database.py](src/database.py) - creates/updates integration
+- `set_client_integration()` in [database.py](src/database.py) - creates/updates integration (supports `metadata` JSONB)
 - `get_client_by_integration()` in [database.py](src/database.py) - reverse lookup by external ID
 - `list_client_integrations()` in [database.py](src/database.py) - list all integrations
 

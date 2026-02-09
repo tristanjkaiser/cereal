@@ -311,7 +311,7 @@ def get_meeting_details(meeting_id: int) -> str:
     if not meeting:
         return f"Meeting with ID {meeting_id} not found."
 
-    return format_meeting_details(meeting, include_transcript=False)
+    return format_meeting_details(meeting, include_transcript=True)
 
 
 @mcp.tool()
@@ -958,7 +958,8 @@ def assign_meeting_to_client(meeting_id: int, client_name: str) -> str:
 def link_client_to_linear_team(
     client_name: str,
     linear_team_id: str,
-    linear_team_name: str = None
+    linear_team_name: str = None,
+    linear_team_key: str = None
 ) -> str:
     """Link a Cereal client to a Linear team for cross-system correlation.
 
@@ -969,6 +970,7 @@ def link_client_to_linear_team(
         client_name: Name of the Cereal client
         linear_team_id: Linear team ID (e.g., "team_abc123")
         linear_team_name: Optional human-readable team name
+        linear_team_key: Optional team key/prefix used in issue IDs (e.g., "WANDER" from "WANDER-504")
 
     Returns:
         Confirmation of the link.
@@ -990,17 +992,23 @@ def link_client_to_linear_team(
             f"'{existing['name']}'. Unlink it first."
         )
 
+    metadata = {}
+    if linear_team_key:
+        metadata['team_key'] = linear_team_key
+
     # Create the link
     db.set_client_integration(
         client_id=client_id,
         integration_type='linear_team',
         external_id=linear_team_id,
-        external_name=linear_team_name
+        external_name=linear_team_name,
+        metadata=metadata
     )
 
     name_note = f" ({linear_team_name})" if linear_team_name else ""
+    key_note = f" [key: {linear_team_key}]" if linear_team_key else ""
     return (
-        f"Linked client \"{client_name}\" to Linear team {linear_team_id}{name_note}.\n"
+        f"Linked client \"{client_name}\" to Linear team {linear_team_id}{name_note}{key_note}.\n"
         f"Claude can now correlate meetings and issues across both systems."
     )
 
@@ -1027,19 +1035,27 @@ def get_client_linear_team(client_name: str) -> str:
         return f"Client '{client_name}' is not linked to a Linear team."
 
     name_note = f" ({integration['external_name']})" if integration['external_name'] else ""
-    return (
-        f"# Linear Team for {client_name}\n\n"
-        f"**Team ID:** {integration['external_id']}{name_note}\n"
-        f"**Linked:** {integration['created_at'].strftime('%Y-%m-%d')}"
-    )
+    metadata = integration.get('metadata') or {}
+    team_key = metadata.get('team_key')
+
+    lines = [
+        f"# Linear Team for {client_name}\n",
+        f"**Team ID:** {integration['external_id']}{name_note}",
+    ]
+    if team_key:
+        lines.append(f"**Team Key:** {team_key}")
+    lines.append(f"**Linked:** {integration['created_at'].strftime('%Y-%m-%d')}")
+
+    return "\n".join(lines)
 
 
 @mcp.tool()
 def list_integration_status() -> str:
-    """Show all clients and their Linear team mappings.
+    """Show all clients and their integration mappings.
 
-    Lists all clients with their linked Linear teams, plus clients
-    that are not yet linked. Useful for identifying unmapped clients.
+    Lists all clients with their linked integrations (Linear teams,
+    Slack channels, etc.), plus clients that are not yet linked.
+    Useful for identifying unmapped clients.
 
     Returns:
         Status of all client integrations.
@@ -1049,21 +1065,36 @@ def list_integration_status() -> str:
     # Get all clients with meeting counts
     clients = db.get_clients_with_meeting_counts()
 
-    # Get all Linear team integrations
-    integrations = db.list_client_integrations(integration_type='linear_team')
-    integration_map = {i['client_id']: i for i in integrations}
+    # Get all integrations (all types)
+    integrations = db.list_client_integrations()
+    integration_map = {}
+    for i in integrations:
+        integration_map.setdefault(i['client_id'], []).append(i)
 
     linked = []
     unlinked = []
 
     for client in clients:
-        integration = integration_map.get(client['id'])
-        if integration:
-            name_note = f" ({integration['external_name']})" if integration['external_name'] else ""
-            linked.append(
-                f"- **{client['name']}** → {integration['external_id']}{name_note} "
-                f"({client['meeting_count']} meetings)"
-            )
+        client_integrations = integration_map.get(client['id'], [])
+        if client_integrations:
+            parts = [f"- **{client['name']}** ({client['meeting_count']} meetings)"]
+            for ci in client_integrations:
+                metadata = ci.get('metadata') or {}
+                itype = ci['integration_type']
+
+                if itype == 'linear_team':
+                    name_note = f" ({ci['external_name']})" if ci['external_name'] else ""
+                    key_note = f" [key: {metadata.get('team_key')}]" if metadata.get('team_key') else ""
+                    parts.append(f"  - Linear: {ci['external_id']}{name_note}{key_note}")
+                elif itype == 'slack':
+                    ext_id = metadata.get('external_channel_id')
+                    ext_note = f", external: {ext_id}" if ext_id else ""
+                    parts.append(f"  - Slack: internal: {ci['external_id']}{ext_note}")
+                else:
+                    name_note = f" ({ci['external_name']})" if ci['external_name'] else ""
+                    parts.append(f"  - {itype}: {ci['external_id']}{name_note}")
+
+            linked.append("\n".join(parts))
         else:
             unlinked.append(
                 f"- **{client['name']}** ({client['meeting_count']} meetings)"
@@ -1072,7 +1103,7 @@ def list_integration_status() -> str:
     lines = ["# Client Integration Status\n"]
 
     if linked:
-        lines.append("## Linked to Linear\n")
+        lines.append("## Linked\n")
         lines.extend(linked)
         lines.append("")
 
@@ -1117,6 +1148,149 @@ def unlink_client_integration(client_name: str, integration_type: str = "linear_
         )
     else:
         return f"Failed to unlink client '{client_name}'."
+
+
+@mcp.tool()
+def link_client_to_slack(
+    client_name: str,
+    internal_channel_id: str,
+    external_channel_id: str = None
+) -> str:
+    """Link a Cereal client to Slack channels.
+
+    Each client has an internal Slack channel (required) and optionally
+    an external/shared channel for client-facing communication.
+
+    Args:
+        client_name: Name of the Cereal client
+        internal_channel_id: Slack channel ID for the internal team channel
+        external_channel_id: Optional Slack channel ID for the external/shared channel
+
+    Returns:
+        Confirmation of the link.
+    """
+    db = get_db()
+
+    client = db.get_client_by_name(client_name)
+    if not client:
+        client_id = db.get_or_create_client(client_name)
+    else:
+        client_id = client['id']
+
+    metadata = {}
+    if external_channel_id:
+        metadata['external_channel_id'] = external_channel_id
+
+    db.set_client_integration(
+        client_id=client_id,
+        integration_type='slack',
+        external_id=internal_channel_id,
+        metadata=metadata
+    )
+
+    lines = [f"Linked client \"{client_name}\" to Slack:"]
+    lines.append(f"  Internal: {internal_channel_id}")
+    if external_channel_id:
+        lines.append(f"  External: {external_channel_id}")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def get_client_slack(client_name: str) -> str:
+    """Get the Slack channels linked to a client.
+
+    Args:
+        client_name: Name of the client
+
+    Returns:
+        Slack channel IDs if linked, or a message if not linked.
+    """
+    db = get_db()
+
+    client = db.get_client_by_name(client_name)
+    if not client:
+        return f"Client '{client_name}' not found."
+
+    integration = db.get_client_integration(client['id'], 'slack')
+
+    if not integration:
+        return f"Client '{client_name}' is not linked to Slack channels."
+
+    metadata = integration.get('metadata') or {}
+
+    lines = [
+        f"# Slack Channels for {client_name}\n",
+        f"**Internal:** {integration['external_id']}",
+    ]
+
+    ext_id = metadata.get('external_channel_id')
+    if ext_id:
+        lines.append(f"**External:** {ext_id}")
+
+    lines.append(f"**Linked:** {integration['created_at'].strftime('%Y-%m-%d')}")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def get_client_config(client_name: str) -> str:
+    """Get all integration data for a client in one call.
+
+    Returns Linear team (ID, name, key), Slack channels, and any other
+    configured integrations. Use this instead of calling get_client_linear_team
+    and get_client_slack separately.
+
+    Args:
+        client_name: Name of the client
+
+    Returns:
+        All integration data for the client.
+    """
+    db = get_db()
+
+    client = db.get_client_by_name(client_name)
+    if not client:
+        return f"Client '{client_name}' not found."
+
+    integrations = db.list_client_integrations(client_id=client['id'])
+
+    if not integrations:
+        return f"Client '{client_name}' has no integrations configured."
+
+    lines = [f"# Configuration for {client_name}\n"]
+
+    for integration in integrations:
+        itype = integration['integration_type']
+        metadata = integration.get('metadata') or {}
+
+        if itype == 'linear_team':
+            name_note = f" ({integration['external_name']})" if integration['external_name'] else ""
+            lines.append("## Linear Team")
+            lines.append(f"**Team ID:** {integration['external_id']}{name_note}")
+            team_key = metadata.get('team_key')
+            if team_key:
+                lines.append(f"**Team Key:** {team_key}")
+            lines.append("")
+
+        elif itype == 'slack':
+            lines.append("## Slack Channels")
+            lines.append(f"**Internal:** {integration['external_id']}")
+            ext_id = metadata.get('external_channel_id')
+            if ext_id:
+                lines.append(f"**External:** {ext_id}")
+            lines.append("")
+
+        else:
+            name_note = f" ({integration['external_name']})" if integration['external_name'] else ""
+            lines.append(f"## {itype.replace('_', ' ').title()}")
+            lines.append(f"**ID:** {integration['external_id']}{name_note}")
+            if metadata:
+                for k, v in metadata.items():
+                    lines.append(f"**{k.replace('_', ' ').title()}:** {v}")
+            lines.append("")
+
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":

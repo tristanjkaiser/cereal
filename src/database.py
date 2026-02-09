@@ -481,29 +481,33 @@ class DatabaseManager:
         client_id: int,
         integration_type: str,
         external_id: str,
-        external_name: Optional[str] = None
+        external_name: Optional[str] = None,
+        metadata: Optional[Dict] = None
     ) -> int:
         """
         Link a client to an external system (Linear team, Slack channel, etc.).
 
         Args:
             client_id: The client to link
-            integration_type: Type of integration ('linear_team', 'slack_channel', etc.)
+            integration_type: Type of integration ('linear_team', 'slack', etc.)
             external_id: ID in the external system
             external_name: Human-readable name in external system
+            metadata: Additional structured data (e.g., team_key, external_channel_id)
 
         Returns:
             The database ID of the created integration
         """
         with self.get_cursor() as cursor:
             cursor.execute("""
-                INSERT INTO client_integrations (client_id, integration_type, external_id, external_name)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO client_integrations (client_id, integration_type, external_id, external_name, metadata)
+                VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (client_id, integration_type) DO UPDATE SET
                     external_id = EXCLUDED.external_id,
-                    external_name = EXCLUDED.external_name
+                    external_name = EXCLUDED.external_name,
+                    metadata = EXCLUDED.metadata
                 RETURNING id
-            """, (client_id, integration_type, external_id, external_name))
+            """, (client_id, integration_type, external_id, external_name,
+                  Json(metadata) if metadata else Json({})))
             result = cursor.fetchone()
             return result['id'] if result else None
 

@@ -799,7 +799,7 @@ class DatabaseManager:
                 RETURNING id
             """, (name, slug))
             result = cursor.fetchone()
-            return result['id']
+            return result['id'] if result else None
 
     def get_clients_with_meeting_counts(self) -> List[Dict]:
         """Get all clients with their meeting counts."""

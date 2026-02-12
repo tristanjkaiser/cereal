@@ -106,6 +106,8 @@ def detect_client_from_meeting(
     Returns:
         Client name if detected, None otherwise
     """
+    if not title:
+        return None
     title_lower = title.lower()
 
     # 0. Check aliases FIRST (highest priority - user-defined mappings)
@@ -469,7 +471,7 @@ def archive_new_meetings(limit: int = 50) -> str:
 
     for doc in new_documents:
         doc_id = doc.get('id') or doc.get('document_id')
-        title = doc.get('title', 'Untitled')
+        title = doc.get('title') or 'Untitled'
         meeting_date = doc.get('created_at') or doc.get('createdAt')
 
         try:

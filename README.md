@@ -13,6 +13,7 @@ Query your [Granola](https://granola.ai) meeting transcripts directly from Claud
 - **Auto-client detection** - automatically assigns clients based on meeting titles and attendees
 - **Client context** - store PRDs, estimates, and other docs per client
 - **Linear integration** - pair with Linear MCP for project/issue context
+- **Slack integration** - link clients to internal and external Slack channels
 
 ## Prerequisites
 
@@ -122,10 +123,13 @@ Ask Claude: "Archive my recent meetings from Granola"
 
 | Tool | Description |
 |------|-------------|
-| `link_client_to_linear_team` | Link a client to a Linear team ID |
+| `link_client_to_linear_team` | Link a client to a Linear team ID, name, and key |
 | `get_client_linear_team` | Get the Linear team linked to a client |
-| `list_integration_status` | Show all clients with their Linear mappings |
-| `unlink_client_integration` | Remove a client's Linear team link |
+| `link_client_to_slack` | Link a client to internal (and optional external) Slack channels |
+| `get_client_slack` | Get the Slack channels linked to a client |
+| `get_client_config` | Get all integration data for a client in one call |
+| `list_integration_status` | Show all clients with their integration mappings |
+| `unlink_client_integration` | Remove a client's integration link |
 
 ## Example Conversations
 
@@ -150,9 +154,10 @@ Once configured, you can ask Claude things like:
 - "Add an alias 'Project Alpha' for client 'ClientC'"
 - "Show me all client aliases"
 
-**Linear Integration:**
+**Integrations:**
 - "Help me map my clients to Linear teams"
 - "Link client ClientA to Linear team [team_id]"
+- "Link client ClientA to Slack channel C0A20JC8A3V"
 - "Show me integration status for all clients"
 - "What Linear team is ClientC linked to?"
 
@@ -195,6 +200,18 @@ When archiving meetings, Cereal automatically detects and assigns clients using:
 New clients are created automatically when detected. Internal meetings (no external attendees or client patterns) remain unassigned.
 
 Configure the internal domain via `INTERNAL_DOMAIN` env var (default: `gojilabs.com`).
+
+## Slack Integration (Optional)
+
+Link clients to their Slack channels so Claude can correlate meeting notes with the right communication channels:
+
+```
+"Link client ClientA to Slack channel C0A20JC8A3V"
+"Link client ClientA to Slack channel C0A20JC8A3V with external channel C08029VUGS0"
+"What Slack channels are linked to ClientA?"
+```
+
+Each client can have an **internal** channel (team-only) and optionally an **external** channel (shared with the client). These mappings are stored in Cereal's database for cross-referencing.
 
 ## Linear Integration (Optional)
 

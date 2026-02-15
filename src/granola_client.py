@@ -82,7 +82,7 @@ class GranolaClient:
             print(f"\n🔍 DEBUG: Making request to {url}")
             print(f"   Payload: {data}")
 
-        response = requests.post(url, json=data, headers=headers)
+        response = requests.post(url, json=data, headers=headers, timeout=30)
 
         if debug:
             print(f"   Status: {response.status_code}")
@@ -150,7 +150,7 @@ class GranolaClient:
                 "X-Client-Version": self.CLIENT_VERSION,
             }
 
-            response = requests.post(url, json=data, headers=headers)
+            response = requests.post(url, json=data, headers=headers, timeout=30)
 
             if debug:
                 print(f"   Transcript API Status: {response.status_code}")

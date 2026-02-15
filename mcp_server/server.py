@@ -313,7 +313,7 @@ def get_meeting_details(meeting_id: int) -> str:
     if not meeting:
         return f"Meeting with ID {meeting_id} not found."
 
-    return format_meeting_details(meeting, include_transcript=True)
+    return format_meeting_details(meeting, include_transcript=False)
 
 
 @mcp.tool()

@@ -8,4 +8,4 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 export PYTHONPATH="${PYTHONPATH}:${PROJECT_DIR}"
 export DATABASE_URL="${DATABASE_URL:-postgresql://localhost:5432/cereal}"
 
-exec /Users/tkaiser/.local/bin/uv run --directory "$SCRIPT_DIR" python server.py
+exec uv run --directory "$SCRIPT_DIR" python server.py

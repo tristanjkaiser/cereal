@@ -4,11 +4,14 @@ Database module for PM Agent.
 Handles PostgreSQL connection and meeting archival operations.
 """
 import json
+import logging
 import os
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 try:
     import psycopg2
@@ -144,6 +147,7 @@ class DatabaseManager:
                     meeting_date.replace('Z', '+00:00')
                 )
             except ValueError:
+                logger.warning(f"Failed to parse meeting_date '{meeting_date}', using current time")
                 meeting_date_parsed = datetime.now()
         else:
             meeting_date_parsed = meeting_date
@@ -832,7 +836,7 @@ class DatabaseManager:
             SELECT m.*, c.name as client_name
             FROM meetings m
             LEFT JOIN clients c ON m.client_id = c.id
-            WHERE m.meeting_date >= NOW() - INTERVAL '%s days'
+            WHERE m.meeting_date >= NOW() - (%s * INTERVAL '1 day')
         """
         params: List[Any] = [days]
 

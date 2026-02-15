@@ -2,45 +2,24 @@
 
 ## Client Population
 
-### Current Approach: Manual/On-Demand
+### Auto-Client Detection
 
-Clients are created through two mechanisms:
+When `archive_new_meetings` runs, each meeting is automatically assigned to a client via `detect_client_from_meeting()` in `server.py`. Detection uses the following priority order:
 
-1. **Explicit creation** via `get_or_create_client()` when adding context:
-   ```python
-   # In add_client_context tool
-   client = db.get_client_by_name(client_name)
-   if not client:
-       client_id = db.get_or_create_client(client_name)
-   ```
+1. **Client aliases** (highest priority) — user-defined mappings via `merge_clients` or `add_client_alias`. Checked against the meeting title (case-insensitive).
 
-2. **Meeting title parsing** (not yet automated):
-   - Meetings are archived with `client_id = NULL` by default
-   - The `clients` table exists but meetings aren't auto-linked
+2. **Known client name** — if an existing client name appears in the title.
 
-### How Client Matching Could Work
+3. **Title pattern extraction**:
+   - `{Client} x Goji ...` → Client
+   - `{Client}: ...` → Client
+   - `Record {Client} ...` → Client
 
-Meeting titles often contain client names:
-```
-"NGynS x Goji Design Check-in"
-"Mothership Weekly Sync"
-"NB44 Strategy Session"
-```
+4. **External attendee company** — if exactly one non-internal company appears in the attendee list (based on `INTERNAL_DOMAIN` env var, default `gojilabs.com`).
 
-Pattern: `{Client} x Goji` or `{Client} {Meeting Type}`
+New clients are auto-created via `get_or_create_client()`. Meetings without a detectable client have `client_id = NULL`.
 
-The Granola API also provides attendee data:
-```json
-{
-  "people": {
-    "attendees": [
-      {"email": "someone@clientdomain.com", "details": {"company": {"name": "ClientCo"}}}
-    ]
-  }
-}
-```
-
-**Not yet implemented**: Auto-detection from title patterns or attendee domains.
+Clients can also be created explicitly via `add_client_context` or `assign_meeting_to_client`.
 
 ---
 
@@ -137,10 +116,11 @@ LIMIT 10
 
 ```
 clients (id, name, slug, notes)
-    ↓
-meetings (id, client_id, title, transcript, enhanced_notes, ...)
-    ↓
-client_context (id, client_id, title, content, context_type, ...)
+    ├── meetings (id, client_id, title, transcript, enhanced_notes, ...)
+    ├── client_context (id, client_id, title, content, context_type, ...)
+    ├── client_aliases (id, alias, canonical_client_id)
+    ├── client_integrations (id, client_id, integration_type, external_id, metadata)
+    └── meeting_series (id, name, client_id, meeting_type)
 ```
 
 Foreign keys enable efficient joins:
@@ -162,8 +142,7 @@ Indexes for common queries:
 
 ## Future Improvements
 
-1. **Auto-client detection**: Parse meeting titles or attendee domains during archival
-2. **Embedding search**: Semantic similarity instead of just keyword matching
+1. **Embedding search**: Semantic similarity instead of just keyword matching
 3. **Chunked transcripts**: Retrieve specific time ranges instead of full transcript
 4. **Smart summaries**: Auto-generate `content_summary` for context docs
 5. **Date range queries**: Filter meetings by date range to reduce result sets

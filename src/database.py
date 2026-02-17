@@ -1018,6 +1018,392 @@ class DatabaseManager:
             cursor.execute("DELETE FROM client_context WHERE id = %s", (context_id,))
             return cursor.rowcount > 0
 
+    # Timeline methods
+
+    def create_timeline(
+        self,
+        client_id: int,
+        project_name: str,
+        sow_signed_date: Optional[str] = None,
+        estimated_design_weeks_low: Optional[float] = None,
+        estimated_design_weeks_high: Optional[float] = None,
+        estimated_dev_weeks_low: Optional[float] = None,
+        estimated_dev_weeks_high: Optional[float] = None,
+        estimated_overall_weeks_low: Optional[float] = None,
+        estimated_overall_weeks_high: Optional[float] = None,
+        notes: Optional[str] = None
+    ) -> int:
+        """Create a new project timeline. Returns timeline ID."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO timelines (
+                    client_id, project_name, sow_signed_date,
+                    estimated_design_weeks_low, estimated_design_weeks_high,
+                    estimated_dev_weeks_low, estimated_dev_weeks_high,
+                    estimated_overall_weeks_low, estimated_overall_weeks_high,
+                    notes
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (
+                client_id, project_name, sow_signed_date,
+                estimated_design_weeks_low, estimated_design_weeks_high,
+                estimated_dev_weeks_low, estimated_dev_weeks_high,
+                estimated_overall_weeks_low, estimated_overall_weeks_high,
+                notes
+            ))
+            result = cursor.fetchone()
+            return result['id']
+
+    def get_timeline(self, timeline_id: int) -> Optional[Dict]:
+        """Get a timeline by ID."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT t.*, c.name as client_name
+                FROM timelines t
+                JOIN clients c ON t.client_id = c.id
+                WHERE t.id = %s
+            """, (timeline_id,))
+            return cursor.fetchone()
+
+    def get_timelines_for_client(self, client_id: int, status: Optional[str] = None) -> List[Dict]:
+        """Get all timelines for a client, optionally filtered by status."""
+        query = """
+            SELECT t.*, c.name as client_name
+            FROM timelines t
+            JOIN clients c ON t.client_id = c.id
+            WHERE t.client_id = %s
+        """
+        params: List[Any] = [client_id]
+        if status:
+            query += " AND t.status = %s"
+            params.append(status)
+        query += " ORDER BY t.created_at DESC"
+        with self.get_cursor() as cursor:
+            cursor.execute(query, params)
+            return cursor.fetchall()
+
+    def list_timelines(self, status: Optional[str] = None) -> List[Dict]:
+        """List all timelines, optionally filtered by status."""
+        query = """
+            SELECT t.*, c.name as client_name
+            FROM timelines t
+            JOIN clients c ON t.client_id = c.id
+        """
+        params: List[Any] = []
+        if status:
+            query += " WHERE t.status = %s"
+            params.append(status)
+        query += " ORDER BY c.name, t.created_at DESC"
+        with self.get_cursor() as cursor:
+            cursor.execute(query, params)
+            return cursor.fetchall()
+
+    def update_timeline(self, timeline_id: int, **kwargs) -> bool:
+        """Update timeline fields. Pass any column name as keyword arg."""
+        allowed = {
+            'project_name', 'sow_signed_date', 'status', 'notes',
+            'estimated_design_weeks_low', 'estimated_design_weeks_high',
+            'estimated_dev_weeks_low', 'estimated_dev_weeks_high',
+            'estimated_overall_weeks_low', 'estimated_overall_weeks_high'
+        }
+        updates = []
+        params = []
+        for key, value in kwargs.items():
+            if key in allowed:
+                updates.append(f"{key} = %s")
+                params.append(value)
+        if not updates:
+            return False
+        updates.append("updated_at = NOW()")
+        params.append(timeline_id)
+        with self.get_cursor() as cursor:
+            cursor.execute(f"""
+                UPDATE timelines SET {', '.join(updates)} WHERE id = %s
+            """, params)
+            return cursor.rowcount > 0
+
+    # Phase methods
+
+    def create_phase(
+        self,
+        timeline_id: int,
+        name: str,
+        phase_type: str,
+        sort_order: int = 0,
+        parent_phase_id: Optional[int] = None,
+        planned_start_date: Optional[str] = None,
+        planned_end_date: Optional[str] = None,
+        planned_duration_weeks_low: Optional[float] = None,
+        planned_duration_weeks_high: Optional[float] = None,
+        notes: Optional[str] = None
+    ) -> int:
+        """Create a timeline phase. Returns phase ID."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO timeline_phases (
+                    timeline_id, parent_phase_id, name, phase_type, sort_order,
+                    planned_start_date, planned_end_date,
+                    planned_duration_weeks_low, planned_duration_weeks_high, notes
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (
+                timeline_id, parent_phase_id, name, phase_type, sort_order,
+                planned_start_date, planned_end_date,
+                planned_duration_weeks_low, planned_duration_weeks_high, notes
+            ))
+            result = cursor.fetchone()
+            return result['id']
+
+    def get_phases_for_timeline(self, timeline_id: int) -> List[Dict]:
+        """Get all phases for a timeline, ordered by sort_order."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT * FROM timeline_phases
+                WHERE timeline_id = %s
+                ORDER BY sort_order, id
+            """, (timeline_id,))
+            return cursor.fetchall()
+
+    def get_phase(self, phase_id: int) -> Optional[Dict]:
+        """Get a phase by ID."""
+        with self.get_cursor() as cursor:
+            cursor.execute("SELECT * FROM timeline_phases WHERE id = %s", (phase_id,))
+            return cursor.fetchone()
+
+    def update_phase(self, phase_id: int, **kwargs) -> bool:
+        """Update phase fields."""
+        allowed = {
+            'name', 'status', 'planned_start_date', 'planned_end_date',
+            'actual_start_date', 'actual_end_date', 'linear_project_id', 'notes',
+            'planned_duration_weeks_low', 'planned_duration_weeks_high'
+        }
+        updates = []
+        params = []
+        for key, value in kwargs.items():
+            if key in allowed:
+                updates.append(f"{key} = %s")
+                params.append(value)
+        if not updates:
+            return False
+        updates.append("updated_at = NOW()")
+        params.append(phase_id)
+        with self.get_cursor() as cursor:
+            cursor.execute(f"""
+                UPDATE timeline_phases SET {', '.join(updates)} WHERE id = %s
+            """, params)
+            return cursor.rowcount > 0
+
+    # Milestone methods
+
+    def create_milestone(
+        self,
+        phase_id: int,
+        name: str,
+        description: Optional[str] = None,
+        target_date: Optional[str] = None,
+        linear_issue_id: Optional[str] = None,
+        linear_project_id: Optional[str] = None
+    ) -> int:
+        """Create a milestone. Returns milestone ID."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO timeline_milestones (
+                    phase_id, name, description, target_date,
+                    linear_issue_id, linear_project_id
+                ) VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (phase_id, name, description, target_date,
+                  linear_issue_id, linear_project_id))
+            result = cursor.fetchone()
+            return result['id']
+
+    def get_milestones_for_phase(self, phase_id: int) -> List[Dict]:
+        """Get all milestones for a phase."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT * FROM timeline_milestones
+                WHERE phase_id = %s
+                ORDER BY target_date NULLS LAST, id
+            """, (phase_id,))
+            return cursor.fetchall()
+
+    def update_milestone(self, milestone_id: int, **kwargs) -> bool:
+        """Update milestone fields."""
+        allowed = {
+            'name', 'description', 'status', 'target_date', 'actual_date',
+            'linear_issue_id', 'linear_project_id', 'meeting_id'
+        }
+        updates = []
+        params = []
+        for key, value in kwargs.items():
+            if key in allowed:
+                updates.append(f"{key} = %s")
+                params.append(value)
+        if not updates:
+            return False
+        updates.append("updated_at = NOW()")
+        params.append(milestone_id)
+        with self.get_cursor() as cursor:
+            cursor.execute(f"""
+                UPDATE timeline_milestones SET {', '.join(updates)} WHERE id = %s
+            """, params)
+            return cursor.rowcount > 0
+
+    def get_milestone(self, milestone_id: int) -> Optional[Dict]:
+        """Get a milestone by ID."""
+        with self.get_cursor() as cursor:
+            cursor.execute("SELECT * FROM timeline_milestones WHERE id = %s", (milestone_id,))
+            return cursor.fetchone()
+
+    # Workshop methods
+
+    def create_workshop(
+        self,
+        phase_id: int,
+        workshop_number: int,
+        scheduled_date: Optional[str] = None
+    ) -> int:
+        """Create a workshop record. Returns workshop ID."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO timeline_workshops (phase_id, workshop_number, scheduled_date)
+                VALUES (%s, %s, %s)
+                RETURNING id
+            """, (phase_id, workshop_number, scheduled_date))
+            result = cursor.fetchone()
+            return result['id']
+
+    def get_workshops_for_phase(self, phase_id: int) -> List[Dict]:
+        """Get all workshops for a phase, ordered by number."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT * FROM timeline_workshops
+                WHERE phase_id = %s
+                ORDER BY workshop_number
+            """, (phase_id,))
+            return cursor.fetchall()
+
+    def update_workshop(self, workshop_id: int, **kwargs) -> bool:
+        """Update workshop fields."""
+        allowed = {
+            'scheduled_date', 'actual_date', 'meeting_id', 'status', 'notes'
+        }
+        updates = []
+        params = []
+        for key, value in kwargs.items():
+            if key in allowed:
+                updates.append(f"{key} = %s")
+                params.append(value)
+        if not updates:
+            return False
+        updates.append("updated_at = NOW()")
+        params.append(workshop_id)
+        with self.get_cursor() as cursor:
+            cursor.execute(f"""
+                UPDATE timeline_workshops SET {', '.join(updates)} WHERE id = %s
+            """, params)
+            return cursor.rowcount > 0
+
+    # Snapshot methods
+
+    def save_snapshot(
+        self,
+        timeline_id: int,
+        health: str,
+        current_phase: str,
+        summary: str,
+        linear_stats: Optional[Dict] = None,
+        details: Optional[Dict] = None,
+        triggered_by: str = 'manual'
+    ) -> int:
+        """Save a project health snapshot. Returns snapshot ID."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO timeline_snapshots (
+                    timeline_id, health, current_phase, summary,
+                    linear_stats, details, triggered_by
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (
+                timeline_id, health, current_phase, summary,
+                Json(linear_stats) if linear_stats else None,
+                Json(details) if details else None,
+                triggered_by
+            ))
+            result = cursor.fetchone()
+            return result['id']
+
+    def get_snapshots(
+        self,
+        timeline_id: int,
+        limit: int = 10,
+        since: Optional[str] = None
+    ) -> List[Dict]:
+        """Get health snapshots for a timeline."""
+        query = """
+            SELECT * FROM timeline_snapshots
+            WHERE timeline_id = %s
+        """
+        params: List[Any] = [timeline_id]
+        if since:
+            query += " AND snapshot_date >= %s"
+            params.append(since)
+        query += " ORDER BY snapshot_date DESC LIMIT %s"
+        params.append(limit)
+        with self.get_cursor() as cursor:
+            cursor.execute(query, params)
+            return cursor.fetchall()
+
+    # Linear mapping methods
+
+    def create_linear_mapping(
+        self,
+        timeline_id: int,
+        phase_id: Optional[int] = None,
+        milestone_id: Optional[int] = None,
+        linear_project_id: Optional[str] = None,
+        linear_project_name: Optional[str] = None,
+        linear_milestone_id: Optional[str] = None
+    ) -> int:
+        """Create a Linear-to-timeline mapping. Returns mapping ID."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO timeline_linear_mappings (
+                    timeline_id, phase_id, milestone_id,
+                    linear_project_id, linear_project_name, linear_milestone_id
+                ) VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (
+                timeline_id, phase_id, milestone_id,
+                linear_project_id, linear_project_name, linear_milestone_id
+            ))
+            result = cursor.fetchone()
+            return result['id']
+
+    def get_linear_mappings_for_timeline(self, timeline_id: int) -> List[Dict]:
+        """Get all Linear mappings for a timeline."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT tlm.*,
+                       tp.name as phase_name,
+                       tm.name as milestone_name
+                FROM timeline_linear_mappings tlm
+                LEFT JOIN timeline_phases tp ON tlm.phase_id = tp.id
+                LEFT JOIN timeline_milestones tm ON tlm.milestone_id = tm.id
+                WHERE tlm.timeline_id = %s
+                ORDER BY tlm.id
+            """, (timeline_id,))
+            return cursor.fetchall()
+
+    def get_linear_mappings_for_phase(self, phase_id: int) -> List[Dict]:
+        """Get Linear mappings for a specific phase."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT * FROM timeline_linear_mappings
+                WHERE phase_id = %s
+            """, (phase_id,))
+            return cursor.fetchall()
+
 
 def get_database_manager() -> Optional[DatabaseManager]:
     """

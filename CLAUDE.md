@@ -35,11 +35,14 @@ Granola (local app) → GranolaClient → PostgreSQL ← MCP Server → Claude D
 | `mcp_server/pyproject.toml` | MCP server dependencies (uses uv) |
 | `src/database.py` | DatabaseManager class for PostgreSQL |
 | `src/granola_client.py` | GranolaClient for Granola API |
-| `scripts/setup_database.sql` | Database schema |
+| `scripts/setup_database.sql` | Database schema (core tables) |
+| `scripts/timeline_migration.sql` | Timeline tables migration |
 
 ## Database Schema
 
-Six tables: `clients`, `meeting_series`, `meetings`, `client_context`, `client_aliases`, `client_integrations`
+Core tables: `clients`, `meeting_series`, `meetings`, `client_context`, `client_aliases`, `client_integrations`
+
+Timeline tables: `timelines`, `timeline_phases`, `timeline_milestones`, `timeline_workshops`, `timeline_snapshots`, `timeline_linear_mappings`
 
 The `meetings` table stores:
 - `granola_document_id` - unique ID from Granola
@@ -173,6 +176,49 @@ First arg is the internal channel ID, second (optional) is the external/client-f
 2. Claude calls Cereal `list_integration_status` → gets clients + existing mappings
 3. Claude compares names and suggests matches
 4. User confirms, Claude calls `link_client_to_linear_team()`
+
+### Timeline Tools
+
+| Tool | Description |
+|------|-------------|
+| `create_timeline` | Create a project timeline for a client (auto-creates standard Goji phases) |
+| `get_timeline` | Get full timeline with phases, milestones, workshops, and status |
+| `list_timelines` | List all timelines, optionally filtered by client or status |
+| `update_phase` | Update phase status, dates, or link to Linear project |
+| `add_milestone` | Add a milestone to a phase |
+| `update_milestone` | Update milestone status and dates |
+| `record_workshop` | Record Strategy Sprint workshop completion |
+| `map_linear_to_phase` | Connect a Linear project to a timeline phase |
+| `map_linear_to_milestone` | Connect a Linear issue/project to a milestone |
+| `assess_project_health` | Cross-reference timeline + meetings + Linear for health assessment |
+| `get_project_snapshots` | Historical health assessments for a project |
+
+**Standard Goji Lifecycle (auto-created with `create_timeline`):**
+```
+Strategy Sprint (4 workshops)
+Design Phase
+  └─ User Flow IA + Low-fis
+  └─ UI Exploration
+  └─ Design System
+  └─ High-fis
+  └─ Revisions / Hand-off
+Dev Phase
+```
+
+**"Where are we on [project]?" workflow:**
+1. `assess_project_health("ClientName")` — returns timeline status + Linear project IDs
+2. Claude queries Linear MCP for ticket breakdowns on mapped projects
+3. Claude queries recent meetings via `get_client_meetings`
+4. Claude synthesizes a health assessment
+5. Snapshot is stored for historical tracking via `get_project_snapshots`
+
+**Timeline Schema:**
+- `timelines` — one per client project, stores SOW estimates and status
+- `timeline_phases` — phases and subphases (self-referential via `parent_phase_id`)
+- `timeline_milestones` — key checkpoints within phases
+- `timeline_workshops` — Strategy Sprint workshop tracking (4 per sprint)
+- `timeline_snapshots` — point-in-time health assessments (on_track/at_risk/off_track)
+- `timeline_linear_mappings` — connects Linear projects to phases/milestones
 
 ## Development
 

@@ -1295,6 +1295,894 @@ def get_client_config(client_name: str) -> str:
     return "\n".join(lines)
 
 
+# Timeline Tools
+
+@mcp.tool()
+def create_timeline(
+    client_name: str,
+    project_name: str,
+    sow_signed_date: str = None,
+    design_weeks_low: float = None,
+    design_weeks_high: float = None,
+    dev_weeks_low: float = None,
+    dev_weeks_high: float = None,
+    overall_weeks_low: float = None,
+    overall_weeks_high: float = None,
+    auto_create_phases: bool = True
+) -> str:
+    """Create a new project timeline for a client.
+
+    Creates the timeline and optionally the standard Goji phase structure:
+    Strategy Sprint (with 4 workshops), Design Phase (with 5 subphases), Dev Phase.
+
+    Args:
+        client_name: Client name (e.g., "NGynS", "Ways2Wander")
+        project_name: Project name (e.g., "Physician Directory v2")
+        sow_signed_date: Optional ISO date when SOW was signed
+        design_weeks_low: Estimated design phase duration (low end)
+        design_weeks_high: Estimated design phase duration (high end)
+        dev_weeks_low: Estimated dev phase duration (low end)
+        dev_weeks_high: Estimated dev phase duration (high end)
+        overall_weeks_low: Estimated overall duration (low end)
+        overall_weeks_high: Estimated overall duration (high end)
+        auto_create_phases: If true, create standard Goji phase structure (default true)
+
+    Returns:
+        Timeline ID and summary of what was created.
+    """
+    db = get_db()
+
+    client = db.get_client_by_name(client_name)
+    if not client:
+        client_id = db.get_or_create_client(client_name)
+    else:
+        client_id = client['id']
+
+    timeline_id = db.create_timeline(
+        client_id=client_id,
+        project_name=project_name,
+        sow_signed_date=sow_signed_date,
+        estimated_design_weeks_low=design_weeks_low,
+        estimated_design_weeks_high=design_weeks_high,
+        estimated_dev_weeks_low=dev_weeks_low,
+        estimated_dev_weeks_high=dev_weeks_high,
+        estimated_overall_weeks_low=overall_weeks_low,
+        estimated_overall_weeks_high=overall_weeks_high
+    )
+
+    lines = [
+        f"# Timeline Created\n",
+        f"**Timeline ID:** {timeline_id}",
+        f"**Client:** {client_name}",
+        f"**Project:** {project_name}",
+    ]
+
+    if sow_signed_date:
+        lines.append(f"**SOW Signed:** {sow_signed_date}")
+
+    estimates = []
+    if design_weeks_low and design_weeks_high:
+        estimates.append(f"Design: {design_weeks_low}-{design_weeks_high} weeks")
+    if dev_weeks_low and dev_weeks_high:
+        estimates.append(f"Dev: {dev_weeks_low}-{dev_weeks_high} weeks")
+    if overall_weeks_low and overall_weeks_high:
+        estimates.append(f"Overall: {overall_weeks_low}-{overall_weeks_high} weeks")
+    if estimates:
+        lines.append(f"**Estimates:** {', '.join(estimates)}")
+
+    if auto_create_phases:
+        # Strategy Sprint
+        strategy_id = db.create_phase(
+            timeline_id=timeline_id,
+            name="Strategy Sprint",
+            phase_type="strategy",
+            sort_order=0
+        )
+        # Create 4 workshops
+        for i in range(1, 5):
+            db.create_workshop(phase_id=strategy_id, workshop_number=i)
+
+        # Design Phase
+        design_id = db.create_phase(
+            timeline_id=timeline_id,
+            name="Design Phase",
+            phase_type="design",
+            sort_order=1,
+            planned_duration_weeks_low=design_weeks_low,
+            planned_duration_weeks_high=design_weeks_high
+        )
+        # Design subphases
+        design_subphases = [
+            "User Flow IA + Low-fis",
+            "UI Exploration",
+            "Design System",
+            "High-fis",
+            "Revisions / Hand-off"
+        ]
+        for i, subphase_name in enumerate(design_subphases):
+            db.create_phase(
+                timeline_id=timeline_id,
+                name=subphase_name,
+                phase_type="design_subphase",
+                sort_order=i,
+                parent_phase_id=design_id
+            )
+
+        # Dev Phase
+        db.create_phase(
+            timeline_id=timeline_id,
+            name="Dev Phase",
+            phase_type="dev",
+            sort_order=2,
+            planned_duration_weeks_low=dev_weeks_low,
+            planned_duration_weeks_high=dev_weeks_high
+        )
+
+        lines.append("")
+        lines.append("## Auto-created Phases")
+        lines.append("- Strategy Sprint (4 workshops)")
+        lines.append("- Design Phase")
+        lines.append("  - User Flow IA + Low-fis")
+        lines.append("  - UI Exploration")
+        lines.append("  - Design System")
+        lines.append("  - High-fis")
+        lines.append("  - Revisions / Hand-off")
+        lines.append("- Dev Phase")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def get_timeline(
+    client_name: str,
+    project_name: str = None,
+    include_linear_status: bool = False
+) -> str:
+    """Get a client's project timeline with phases, milestones, and status.
+
+    Args:
+        client_name: Client name
+        project_name: Specific project name (if client has multiple timelines)
+        include_linear_status: If true, include Linear project IDs for cross-referencing
+
+    Returns:
+        Full timeline structure with phase statuses.
+    """
+    db = get_db()
+
+    client = db.get_client_by_name(client_name)
+    if not client:
+        return f"Client '{client_name}' not found."
+
+    timelines = db.get_timelines_for_client(client['id'])
+    if not timelines:
+        return f"No timelines found for '{client_name}'."
+
+    # Find the right timeline
+    timeline = None
+    if project_name:
+        for t in timelines:
+            if t['project_name'].lower() == project_name.lower():
+                timeline = t
+                break
+        if not timeline:
+            names = [t['project_name'] for t in timelines]
+            return f"No timeline '{project_name}' for {client_name}. Available: {', '.join(names)}"
+    else:
+        # Default to most recent active timeline
+        active = [t for t in timelines if t['status'] == 'active']
+        timeline = active[0] if active else timelines[0]
+
+    # Build the response
+    lines = [f"# {timeline['project_name']} — {client_name}\n"]
+    lines.append(f"**Status:** {timeline['status']}")
+    lines.append(f"**Timeline ID:** {timeline['id']}")
+
+    if timeline.get('sow_signed_date'):
+        lines.append(f"**SOW Signed:** {timeline['sow_signed_date']}")
+
+    estimates = []
+    if timeline.get('estimated_design_weeks_low') and timeline.get('estimated_design_weeks_high'):
+        estimates.append(f"Design: {timeline['estimated_design_weeks_low']}-{timeline['estimated_design_weeks_high']} weeks")
+    if timeline.get('estimated_dev_weeks_low') and timeline.get('estimated_dev_weeks_high'):
+        estimates.append(f"Dev: {timeline['estimated_dev_weeks_low']}-{timeline['estimated_dev_weeks_high']} weeks")
+    if timeline.get('estimated_overall_weeks_low') and timeline.get('estimated_overall_weeks_high'):
+        estimates.append(f"Overall: {timeline['estimated_overall_weeks_low']}-{timeline['estimated_overall_weeks_high']} weeks")
+    if estimates:
+        lines.append(f"**Estimates:** {', '.join(estimates)}")
+
+    if timeline.get('notes'):
+        lines.append(f"**Notes:** {timeline['notes']}")
+
+    # Get phases
+    phases = db.get_phases_for_timeline(timeline['id'])
+    top_level = [p for p in phases if p['parent_phase_id'] is None]
+
+    lines.append("\n## Phases\n")
+
+    for phase in top_level:
+        status_icon = {"upcoming": "⏳", "in_progress": "🔄", "completed": "✅", "skipped": "⏭️"}.get(phase['status'], "")
+        lines.append(f"### {status_icon} {phase['name']} ({phase['status']})")
+        lines.append(f"*Phase ID: {phase['id']} | Type: {phase['phase_type']}*")
+
+        if phase.get('actual_start_date'):
+            lines.append(f"Started: {phase['actual_start_date']}")
+        if phase.get('actual_end_date'):
+            lines.append(f"Ended: {phase['actual_end_date']}")
+        if phase.get('planned_duration_weeks_low') and phase.get('planned_duration_weeks_high'):
+            lines.append(f"Planned: {phase['planned_duration_weeks_low']}-{phase['planned_duration_weeks_high']} weeks")
+        if phase.get('linear_project_id') and include_linear_status:
+            lines.append(f"Linear Project: {phase['linear_project_id']}")
+
+        # Subphases
+        subphases = [p for p in phases if p['parent_phase_id'] == phase['id']]
+        if subphases:
+            for sub in sorted(subphases, key=lambda s: s['sort_order']):
+                sub_icon = {"upcoming": "⏳", "in_progress": "🔄", "completed": "✅", "skipped": "⏭️"}.get(sub['status'], "")
+                lines.append(f"  - {sub_icon} {sub['name']} ({sub['status']}) [ID: {sub['id']}]")
+
+        # Workshops (for strategy phases)
+        if phase['phase_type'] == 'strategy':
+            workshops = db.get_workshops_for_phase(phase['id'])
+            if workshops:
+                lines.append("  **Workshops:**")
+                for w in workshops:
+                    w_icon = {"scheduled": "📅", "completed": "✅", "cancelled": "❌", "rescheduled": "🔄"}.get(w['status'], "")
+                    date_str = ""
+                    if w.get('actual_date'):
+                        date_str = f" ({w['actual_date']})"
+                    elif w.get('scheduled_date'):
+                        date_str = f" (scheduled: {w['scheduled_date']})"
+                    meeting_note = f" — Meeting ID: {w['meeting_id']}" if w.get('meeting_id') else ""
+                    lines.append(f"  - {w_icon} Workshop {w['workshop_number']}: {w['status']}{date_str}{meeting_note}")
+
+        # Milestones
+        milestones = db.get_milestones_for_phase(phase['id'])
+        if milestones:
+            lines.append("  **Milestones:**")
+            for m in milestones:
+                m_icon = {"pending": "⏳", "achieved": "✅", "missed": "❌", "deferred": "↩️"}.get(m['status'], "")
+                date_str = ""
+                if m.get('actual_date'):
+                    date_str = f" (achieved: {m['actual_date']})"
+                elif m.get('target_date'):
+                    date_str = f" (target: {m['target_date']})"
+                lines.append(f"  - {m_icon} {m['name']}: {m['status']}{date_str} [ID: {m['id']}]")
+
+        lines.append("")
+
+    # Linear mappings
+    if include_linear_status:
+        mappings = db.get_linear_mappings_for_timeline(timeline['id'])
+        if mappings:
+            lines.append("## Linear Mappings\n")
+            for mapping in mappings:
+                target = mapping.get('phase_name') or mapping.get('milestone_name') or 'Unknown'
+                lines.append(f"- **{target}** → Linear Project: {mapping['linear_project_id']}")
+                if mapping.get('linear_project_name'):
+                    lines.append(f"  Name: {mapping['linear_project_name']}")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def list_timelines(
+    client_name: str = None,
+    status: str = None
+) -> str:
+    """List all project timelines, optionally filtered by client or status.
+
+    Args:
+        client_name: Optional - filter to a specific client
+        status: Optional - filter by timeline status (active, completed, paused, cancelled)
+
+    Returns:
+        Summary list of timelines with current phase and health.
+    """
+    db = get_db()
+
+    if client_name:
+        client = db.get_client_by_name(client_name)
+        if not client:
+            return f"Client '{client_name}' not found."
+        timelines = db.get_timelines_for_client(client['id'], status=status)
+    else:
+        timelines = db.list_timelines(status=status)
+
+    if not timelines:
+        scope = f" for {client_name}" if client_name else ""
+        status_note = f" with status '{status}'" if status else ""
+        return f"No timelines found{scope}{status_note}."
+
+    lines = ["# Project Timelines\n"]
+
+    for t in timelines:
+        lines.append(f"## {t['client_name']} — {t['project_name']}")
+        lines.append(f"*Timeline ID: {t['id']} | Status: {t['status']}*")
+
+        estimates = []
+        if t.get('estimated_overall_weeks_low') and t.get('estimated_overall_weeks_high'):
+            estimates.append(f"Overall: {t['estimated_overall_weeks_low']}-{t['estimated_overall_weeks_high']} weeks")
+        if estimates:
+            lines.append(f"Estimates: {', '.join(estimates)}")
+
+        # Find current active phase
+        phases = db.get_phases_for_timeline(t['id'])
+        active_phases = [p for p in phases if p['status'] == 'in_progress' and p['parent_phase_id'] is None]
+        if active_phases:
+            phase = active_phases[0]
+            lines.append(f"Current phase: **{phase['name']}**")
+            # Check for active subphase
+            active_subs = [p for p in phases if p['status'] == 'in_progress' and p['parent_phase_id'] == phase['id']]
+            if active_subs:
+                lines.append(f"Current subphase: {active_subs[0]['name']}")
+
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def update_phase(
+    phase_id: int,
+    status: str = None,
+    actual_start_date: str = None,
+    actual_end_date: str = None,
+    linear_project_id: str = None,
+    notes: str = None
+) -> str:
+    """Update a timeline phase's status, dates, or notes.
+
+    Args:
+        phase_id: Phase ID
+        status: New status (upcoming, in_progress, completed, skipped)
+        actual_start_date: ISO date when phase actually started
+        actual_end_date: ISO date when phase actually ended
+        linear_project_id: Link to a Linear project UUID
+        notes: Phase notes
+
+    Returns:
+        Updated phase details.
+    """
+    db = get_db()
+
+    phase = db.get_phase(phase_id)
+    if not phase:
+        return f"Phase {phase_id} not found."
+
+    kwargs = {}
+    if status is not None:
+        kwargs['status'] = status
+    if actual_start_date is not None:
+        kwargs['actual_start_date'] = actual_start_date
+    if actual_end_date is not None:
+        kwargs['actual_end_date'] = actual_end_date
+    if linear_project_id is not None:
+        kwargs['linear_project_id'] = linear_project_id
+    if notes is not None:
+        kwargs['notes'] = notes
+
+    if not kwargs:
+        return "No updates provided."
+
+    success = db.update_phase(phase_id, **kwargs)
+
+    if success:
+        updated = db.get_phase(phase_id)
+        lines = [
+            f"# Updated Phase: {updated['name']}\n",
+            f"**Status:** {updated['status']}",
+        ]
+        if updated.get('actual_start_date'):
+            lines.append(f"**Started:** {updated['actual_start_date']}")
+        if updated.get('actual_end_date'):
+            lines.append(f"**Ended:** {updated['actual_end_date']}")
+        if updated.get('linear_project_id'):
+            lines.append(f"**Linear Project:** {updated['linear_project_id']}")
+        if updated.get('notes'):
+            lines.append(f"**Notes:** {updated['notes']}")
+        return "\n".join(lines)
+    else:
+        return f"Failed to update phase {phase_id}."
+
+
+@mcp.tool()
+def add_milestone(
+    phase_id: int,
+    name: str,
+    description: str = None,
+    target_date: str = None,
+    linear_issue_id: str = None,
+    linear_project_id: str = None
+) -> str:
+    """Add a new milestone to a timeline phase.
+
+    Args:
+        phase_id: Phase to add the milestone to
+        name: Milestone name (e.g., "Low-fi Approval", "Beta Launch")
+        description: Optional description
+        target_date: Optional target date (ISO format)
+        linear_issue_id: Optional link to a Linear issue
+        linear_project_id: Optional link to a Linear project
+
+    Returns:
+        Created milestone details.
+    """
+    db = get_db()
+
+    phase = db.get_phase(phase_id)
+    if not phase:
+        return f"Phase {phase_id} not found."
+
+    milestone_id = db.create_milestone(
+        phase_id=phase_id,
+        name=name,
+        description=description,
+        target_date=target_date,
+        linear_issue_id=linear_issue_id,
+        linear_project_id=linear_project_id
+    )
+
+    lines = [
+        f"# Milestone Created\n",
+        f"**ID:** {milestone_id}",
+        f"**Name:** {name}",
+        f"**Phase:** {phase['name']}",
+    ]
+    if target_date:
+        lines.append(f"**Target:** {target_date}")
+    if description:
+        lines.append(f"**Description:** {description}")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def update_milestone(
+    milestone_id: int,
+    status: str = None,
+    actual_date: str = None,
+    meeting_id: int = None,
+    linear_issue_id: str = None
+) -> str:
+    """Update a milestone's status and dates.
+
+    Args:
+        milestone_id: Milestone ID
+        status: New status (pending, achieved, missed, deferred)
+        actual_date: ISO date when milestone was achieved
+        meeting_id: Link to a Cereal meeting
+        linear_issue_id: Link to a Linear issue
+
+    Returns:
+        Updated milestone details.
+    """
+    db = get_db()
+
+    milestone = db.get_milestone(milestone_id)
+    if not milestone:
+        return f"Milestone {milestone_id} not found."
+
+    kwargs = {}
+    if status is not None:
+        kwargs['status'] = status
+    if actual_date is not None:
+        kwargs['actual_date'] = actual_date
+    if meeting_id is not None:
+        kwargs['meeting_id'] = meeting_id
+    if linear_issue_id is not None:
+        kwargs['linear_issue_id'] = linear_issue_id
+
+    if not kwargs:
+        return "No updates provided."
+
+    success = db.update_milestone(milestone_id, **kwargs)
+
+    if success:
+        updated = db.get_milestone(milestone_id)
+        lines = [
+            f"# Updated Milestone: {updated['name']}\n",
+            f"**Status:** {updated['status']}",
+        ]
+        if updated.get('target_date'):
+            lines.append(f"**Target:** {updated['target_date']}")
+        if updated.get('actual_date'):
+            lines.append(f"**Achieved:** {updated['actual_date']}")
+        return "\n".join(lines)
+    else:
+        return f"Failed to update milestone {milestone_id}."
+
+
+@mcp.tool()
+def record_workshop(
+    phase_id: int,
+    workshop_number: int,
+    date: str = None,
+    meeting_id: int = None
+) -> str:
+    """Record a Strategy Sprint workshop completion.
+
+    Args:
+        phase_id: The Strategy Sprint phase ID
+        workshop_number: Workshop number (1-4)
+        date: Date of the workshop (ISO format, defaults to today)
+        meeting_id: Optional link to Cereal meeting record
+
+    Returns:
+        Updated workshop details.
+    """
+    db = get_db()
+
+    phase = db.get_phase(phase_id)
+    if not phase:
+        return f"Phase {phase_id} not found."
+
+    if phase['phase_type'] != 'strategy':
+        return f"Phase {phase_id} ({phase['name']}) is not a Strategy Sprint phase."
+
+    workshops = db.get_workshops_for_phase(phase_id)
+    target = None
+    for w in workshops:
+        if w['workshop_number'] == workshop_number:
+            target = w
+            break
+
+    if not target:
+        return f"Workshop {workshop_number} not found for phase {phase_id}."
+
+    today = datetime.now().strftime('%Y-%m-%d')
+    kwargs = {
+        'status': 'completed',
+        'actual_date': date or today
+    }
+    if meeting_id is not None:
+        kwargs['meeting_id'] = meeting_id
+
+    db.update_workshop(target['id'], **kwargs)
+
+    return (
+        f"Recorded Workshop {workshop_number} as completed on {kwargs['actual_date']}."
+        + (f" Linked to meeting ID {meeting_id}." if meeting_id else "")
+    )
+
+
+@mcp.tool()
+def map_linear_to_phase(
+    phase_id: int,
+    linear_project_id: str,
+    linear_project_name: str = None
+) -> str:
+    """Connect a Linear project to a timeline phase for progress tracking.
+
+    Args:
+        phase_id: Timeline phase ID
+        linear_project_id: Linear project UUID
+        linear_project_name: Optional human-readable project name
+
+    Returns:
+        Confirmation of mapping.
+    """
+    db = get_db()
+
+    phase = db.get_phase(phase_id)
+    if not phase:
+        return f"Phase {phase_id} not found."
+
+    # Also set on the phase itself for quick access
+    db.update_phase(phase_id, linear_project_id=linear_project_id)
+
+    mapping_id = db.create_linear_mapping(
+        timeline_id=phase['timeline_id'],
+        phase_id=phase_id,
+        linear_project_id=linear_project_id,
+        linear_project_name=linear_project_name
+    )
+
+    name_note = f" ({linear_project_name})" if linear_project_name else ""
+    return (
+        f"Mapped Linear project {linear_project_id}{name_note} "
+        f"to phase \"{phase['name']}\" (mapping ID: {mapping_id})."
+    )
+
+
+@mcp.tool()
+def map_linear_to_milestone(
+    milestone_id: int,
+    linear_issue_id: str = None,
+    linear_project_id: str = None
+) -> str:
+    """Connect a Linear issue or project to a timeline milestone.
+
+    Args:
+        milestone_id: Timeline milestone ID
+        linear_issue_id: Optional Linear issue UUID
+        linear_project_id: Optional Linear project UUID
+
+    Returns:
+        Confirmation of mapping.
+    """
+    db = get_db()
+
+    milestone = db.get_milestone(milestone_id)
+    if not milestone:
+        return f"Milestone {milestone_id} not found."
+
+    if not linear_issue_id and not linear_project_id:
+        return "Provide at least one of linear_issue_id or linear_project_id."
+
+    # Update the milestone itself
+    update_kwargs = {}
+    if linear_issue_id:
+        update_kwargs['linear_issue_id'] = linear_issue_id
+    if linear_project_id:
+        update_kwargs['linear_project_id'] = linear_project_id
+    db.update_milestone(milestone_id, **update_kwargs)
+
+    # Get the phase to find the timeline_id
+    phase = db.get_phase(milestone['phase_id'])
+
+    mapping_id = db.create_linear_mapping(
+        timeline_id=phase['timeline_id'],
+        milestone_id=milestone_id,
+        linear_project_id=linear_project_id,
+        linear_milestone_id=linear_issue_id
+    )
+
+    parts = []
+    if linear_issue_id:
+        parts.append(f"issue {linear_issue_id}")
+    if linear_project_id:
+        parts.append(f"project {linear_project_id}")
+
+    return (
+        f"Mapped Linear {' and '.join(parts)} "
+        f"to milestone \"{milestone['name']}\" (mapping ID: {mapping_id})."
+    )
+
+
+@mcp.tool()
+def assess_project_health(
+    client_name: str,
+    project_name: str = None,
+    save_snapshot: bool = True
+) -> str:
+    """Assess project health by cross-referencing timeline, meetings, and Linear data.
+
+    Returns timeline status, time elapsed vs estimated, Linear project IDs for
+    cross-referencing, and recent meeting context. Claude should use the returned
+    Linear project IDs to query Linear MCP for ticket breakdowns, then synthesize
+    the full picture.
+
+    Args:
+        client_name: Client name
+        project_name: Specific project (defaults to active timeline)
+        save_snapshot: Whether to persist the assessment (default true)
+
+    Returns:
+        Structured assessment data including Linear project IDs for cross-referencing.
+    """
+    db = get_db()
+
+    client = db.get_client_by_name(client_name)
+    if not client:
+        return f"Client '{client_name}' not found."
+
+    # Find timeline
+    timelines = db.get_timelines_for_client(client['id'])
+    if not timelines:
+        return f"No timelines found for '{client_name}'. Create one with create_timeline."
+
+    timeline = None
+    if project_name:
+        for t in timelines:
+            if t['project_name'].lower() == project_name.lower():
+                timeline = t
+                break
+        if not timeline:
+            return f"No timeline '{project_name}' found for {client_name}."
+    else:
+        active = [t for t in timelines if t['status'] == 'active']
+        timeline = active[0] if active else timelines[0]
+
+    # Gather timeline data
+    phases = db.get_phases_for_timeline(timeline['id'])
+    top_phases = [p for p in phases if p['parent_phase_id'] is None]
+    active_phase = None
+    active_subphase = None
+
+    for p in top_phases:
+        if p['status'] == 'in_progress':
+            active_phase = p
+            subs = [s for s in phases if s['parent_phase_id'] == p['id'] and s['status'] == 'in_progress']
+            if subs:
+                active_subphase = subs[0]
+            break
+
+    # Time calculations
+    today = datetime.now().date()
+    time_info = []
+
+    if active_phase and active_phase.get('actual_start_date'):
+        start = active_phase['actual_start_date']
+        if hasattr(start, 'date'):
+            start = start.date() if hasattr(start, 'date') else start
+        elapsed_days = (today - start).days
+        elapsed_weeks = round(elapsed_days / 7, 1)
+        time_info.append(f"Phase started: {start}")
+        time_info.append(f"Weeks elapsed: {elapsed_weeks}")
+
+        if active_phase.get('planned_duration_weeks_low') and active_phase.get('planned_duration_weeks_high'):
+            low = float(active_phase['planned_duration_weeks_low'])
+            high = float(active_phase['planned_duration_weeks_high'])
+            pct_of_low = round((elapsed_weeks / low) * 100, 0) if low > 0 else 0
+            pct_of_high = round((elapsed_weeks / high) * 100, 0) if high > 0 else 0
+            time_info.append(f"Planned duration: {low}-{high} weeks")
+            time_info.append(f"Time used: {pct_of_low}% of low estimate, {pct_of_high}% of high estimate")
+
+    if timeline.get('sow_signed_date'):
+        sow_date = timeline['sow_signed_date']
+        if hasattr(sow_date, 'date'):
+            sow_date = sow_date.date() if hasattr(sow_date, 'date') else sow_date
+        total_elapsed = (today - sow_date).days
+        total_weeks = round(total_elapsed / 7, 1)
+        time_info.append(f"Total weeks since SOW: {total_weeks}")
+        if timeline.get('estimated_overall_weeks_low') and timeline.get('estimated_overall_weeks_high'):
+            time_info.append(f"Overall estimate: {timeline['estimated_overall_weeks_low']}-{timeline['estimated_overall_weeks_high']} weeks")
+
+    # Collect Linear project IDs for cross-referencing
+    linear_ids = []
+    mappings = db.get_linear_mappings_for_timeline(timeline['id'])
+    for m in mappings:
+        if m.get('linear_project_id'):
+            target = m.get('phase_name') or m.get('milestone_name') or 'Unknown'
+            linear_ids.append({
+                'project_id': m['linear_project_id'],
+                'name': m.get('linear_project_name', ''),
+                'target': target
+            })
+
+    # Also check phases directly
+    for p in phases:
+        if p.get('linear_project_id'):
+            already = any(l['project_id'] == p['linear_project_id'] for l in linear_ids)
+            if not already:
+                linear_ids.append({
+                    'project_id': p['linear_project_id'],
+                    'name': '',
+                    'target': p['name']
+                })
+
+    # Get client integration for Linear team ID
+    integration = db.get_client_integration(client['id'], 'linear_team')
+
+    # Recent meetings
+    recent_meetings = db.get_meetings_by_client(client_name, limit=5)
+
+    # Build response
+    lines = [f"# Project Health Assessment: {timeline['project_name']} ({client_name})\n"]
+
+    lines.append(f"**Timeline Status:** {timeline['status']}")
+
+    if active_phase:
+        lines.append(f"**Current Phase:** {active_phase['name']}")
+        if active_subphase:
+            lines.append(f"**Current Subphase:** {active_subphase['name']}")
+    else:
+        completed = [p for p in top_phases if p['status'] == 'completed']
+        upcoming = [p for p in top_phases if p['status'] == 'upcoming']
+        if completed and upcoming:
+            lines.append(f"**Last Completed:** {completed[-1]['name']}")
+            lines.append(f"**Next Up:** {upcoming[0]['name']}")
+
+    if time_info:
+        lines.append("\n## Time Tracking")
+        for info in time_info:
+            lines.append(f"- {info}")
+
+    # Phase summary
+    lines.append("\n## Phase Status")
+    for p in top_phases:
+        lines.append(f"- **{p['name']}**: {p['status']}")
+
+    if linear_ids:
+        lines.append("\n## Linear Projects (query these for ticket breakdown)")
+        for lid in linear_ids:
+            name_note = f" — {lid['name']}" if lid['name'] else ""
+            lines.append(f"- **{lid['target']}**: `{lid['project_id']}`{name_note}")
+
+    if integration:
+        metadata = integration.get('metadata') or {}
+        lines.append(f"\n**Linear Team:** {integration['external_id']}")
+        if metadata.get('team_key'):
+            lines.append(f"**Team Key:** {metadata['team_key']}")
+
+    if recent_meetings:
+        lines.append("\n## Recent Meetings")
+        for m in recent_meetings[:5]:
+            date_str = m['meeting_date'].strftime('%Y-%m-%d')
+            lines.append(f"- [{m['id']}] {date_str} — {m['title']}")
+            if m.get('summary_overview'):
+                lines.append(f"  {m['summary_overview'][:200]}")
+
+    # Workshops status
+    strategy_phases = [p for p in top_phases if p['phase_type'] == 'strategy']
+    for sp in strategy_phases:
+        workshops = db.get_workshops_for_phase(sp['id'])
+        if workshops:
+            completed_w = sum(1 for w in workshops if w['status'] == 'completed')
+            lines.append(f"\n**Strategy Workshops:** {completed_w}/4 completed")
+
+    lines.append("\n---")
+    lines.append("*Use the Linear project IDs above to query Linear MCP for detailed ticket breakdowns.*")
+    lines.append("*Use get_client_slack to find Slack channels for additional context.*")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def get_project_snapshots(
+    client_name: str,
+    project_name: str = None,
+    limit: int = 10,
+    since: str = None
+) -> str:
+    """Retrieve historical health assessments for a project.
+
+    Args:
+        client_name: Client name
+        project_name: Specific project (optional)
+        limit: Maximum number of snapshots to return (default 10)
+        since: Optional ISO date - only return snapshots after this date
+
+    Returns:
+        List of snapshots showing project health trajectory.
+    """
+    db = get_db()
+
+    client = db.get_client_by_name(client_name)
+    if not client:
+        return f"Client '{client_name}' not found."
+
+    timelines = db.get_timelines_for_client(client['id'])
+    if not timelines:
+        return f"No timelines found for '{client_name}'."
+
+    timeline = None
+    if project_name:
+        for t in timelines:
+            if t['project_name'].lower() == project_name.lower():
+                timeline = t
+                break
+    else:
+        active = [t for t in timelines if t['status'] == 'active']
+        timeline = active[0] if active else timelines[0]
+
+    if not timeline:
+        return f"No matching timeline found for '{client_name}'."
+
+    snapshots = db.get_snapshots(timeline['id'], limit=limit, since=since)
+
+    if not snapshots:
+        return f"No health snapshots found for '{timeline['project_name']}'."
+
+    lines = [f"# Health History: {timeline['project_name']} ({client_name})\n"]
+
+    for s in snapshots:
+        health_icon = {"on_track": "🟢", "at_risk": "🟡", "off_track": "🔴"}.get(s['health'], "⚪")
+        date_str = s['snapshot_date'].strftime('%Y-%m-%d %H:%M')
+        lines.append(f"## {health_icon} {date_str} — {s['health'].replace('_', ' ').title()}")
+        lines.append(f"*Phase: {s['current_phase']} | Triggered by: {s.get('triggered_by', 'unknown')}*\n")
+        lines.append(s['summary'])
+
+        if s.get('linear_stats'):
+            stats = s['linear_stats']
+            lines.append(f"\nLinear: {json.dumps(stats)}")
+
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 if __name__ == "__main__":
     logger.info("Starting MCP server...")
     try:

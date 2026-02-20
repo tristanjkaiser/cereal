@@ -39,6 +39,7 @@ createdb cereal
 
 # Run schema
 psql cereal < scripts/setup_database.sql
+psql cereal < scripts/timeline_migration.sql
 ```
 
 ### 3. Configure environment
@@ -131,6 +132,22 @@ Ask Claude: "Archive my recent meetings from Granola"
 | `list_integration_status` | Show all clients with their integration mappings |
 | `unlink_client_integration` | Remove a client's integration link |
 
+### Timeline Tools
+
+| Tool | Description |
+|------|-------------|
+| `create_timeline` | Create a project timeline for a client |
+| `get_timeline` | Get full timeline with phases, milestones, and status |
+| `list_timelines` | List all timelines, optionally filtered by client or status |
+| `update_phase` | Update phase status, dates, or link to Linear project |
+| `add_milestone` | Add a milestone to a phase |
+| `update_milestone` | Update milestone status and dates |
+| `record_workshop` | Record Strategy Sprint workshop completion |
+| `map_linear_to_phase` | Connect a Linear project to a timeline phase |
+| `map_linear_to_milestone` | Connect a Linear issue/project to a milestone |
+| `assess_project_health` | Cross-reference timeline + meetings + Linear for health assessment |
+| `get_project_snapshots` | Historical health assessments for a project |
+
 ## Example Conversations
 
 Once configured, you can ask Claude things like:
@@ -165,15 +182,20 @@ Once configured, you can ask Claude things like:
 
 ```
 cereal/
-├── mcp_server/           # MCP server for Claude Desktop
-│   ├── server.py         # FastMCP server with tools
-│   ├── pyproject.toml    # Dependencies
-│   └── run_server.sh     # Launcher script
-├── src/                  # Core modules
-│   ├── database.py       # PostgreSQL operations
-│   └── granola_client.py # Granola API client
+├── mcp_server/               # MCP server for Claude Desktop
+│   ├── server.py             # FastMCP server with tools
+│   ├── pyproject.toml        # Dependencies
+│   └── run_server.sh         # Launcher script
+├── src/                      # Core modules
+│   ├── database.py           # PostgreSQL operations
+│   └── granola_client.py     # Granola API client
 ├── scripts/
-│   └── setup_database.sql
+│   ├── setup_database.sql    # Core database schema
+│   ├── timeline_migration.sql # Timeline tables
+│   ├── auto_archive.py       # Automated meeting archival
+│   └── auto_archive_ctl.sh   # Enable/disable auto-archive schedule
+├── skills/                   # Claude Code skill prompts
+├── docs/                     # Architecture and design docs
 ├── .env.example
 └── README.md
 ```
@@ -212,6 +234,35 @@ Link clients to their Slack channels so Claude can correlate meeting notes with 
 ```
 
 Each client can have an **internal** channel (team-only) and optionally an **external** channel (shared with the client). These mappings are stored in Cereal's database for cross-referencing.
+
+## Auto-Archive (Optional)
+
+Instead of manually telling Claude to archive meetings, you can run a background script that archives automatically every 30 minutes using macOS launchd.
+
+**How it works:** Meetings are archived after a 2-hour settling period (to ensure Granola has finalized AI notes). Meetings older than 3 hours are left alone. Everything in the window is upserted, so partial archives self-heal on the next run.
+
+### Setup
+
+```bash
+# Install dependencies
+cd cereal
+python3 -m venv venv
+venv/bin/pip install -r requirements.txt
+
+# Test it first
+venv/bin/python scripts/auto_archive.py --dry-run
+
+# Enable the schedule (runs every 30 min)
+bash scripts/auto_archive_ctl.sh enable
+
+# Check status
+bash scripts/auto_archive_ctl.sh status
+
+# Disable when no longer needed
+bash scripts/auto_archive_ctl.sh disable
+```
+
+Logs go to `logs/auto_archive.log`. The settling window is configurable via `AUTO_ARCHIVE_SETTLE_HOURS` and `AUTO_ARCHIVE_FRESHNESS_HOURS` env vars.
 
 ## Linear Integration (Optional)
 

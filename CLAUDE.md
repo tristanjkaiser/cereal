@@ -37,6 +37,8 @@ Granola (local app) → GranolaClient → PostgreSQL ← MCP Server → Claude D
 | `src/granola_client.py` | GranolaClient for Granola API |
 | `scripts/setup_database.sql` | Database schema (core tables) |
 | `scripts/timeline_migration.sql` | Timeline tables migration |
+| `scripts/auto_archive.py` | Automated meeting archival script |
+| `scripts/auto_archive_ctl.sh` | launchd enable/disable/status helper |
 
 ## Database Schema
 
@@ -219,6 +221,34 @@ Dev Phase
 - `timeline_workshops` — Strategy Sprint workshop tracking (4 per sprint)
 - `timeline_snapshots` — point-in-time health assessments (on_track/at_risk/off_track)
 - `timeline_linear_mappings` — connects Linear projects to phases/milestones
+
+## Auto-Archive
+
+`scripts/auto_archive.py` runs on a schedule via macOS launchd to automatically archive meetings without user intervention.
+
+**How it works:**
+- Fetches recent documents from Granola
+- Filters to a **time window**: only meetings where `created_at` is between 2 hours and 3 hours ago
+- Upserts all meetings in the window via `db.archive_meeting()` (ON CONFLICT DO UPDATE)
+- Runs client detection using the same logic as `archive_new_meetings`
+
+**Time window defaults:**
+- `AUTO_ARCHIVE_SETTLE_HOURS=2` — skip meetings likely still in progress
+- `AUTO_ARCHIVE_FRESHNESS_HOURS=3` — stop re-archiving finalized meetings
+
+**Key files:**
+- `scripts/auto_archive.py` — standalone script (imports `DatabaseManager` and `GranolaClient` directly, avoids FastMCP dependency)
+- `scripts/auto_archive_ctl.sh` — enable/disable/status for macOS launchd scheduling (every 30 min)
+- `logs/auto_archive.log` — output log
+
+**CLI:**
+```bash
+python scripts/auto_archive.py --dry-run          # Preview without writing
+python scripts/auto_archive.py --limit 100         # Fetch more docs
+python scripts/auto_archive.py --settle-hours 1    # Override settle period
+```
+
+**Note:** `detect_client_from_meeting()` is duplicated from `server.py` into `auto_archive.py` to avoid importing FastMCP. Changes to detection logic need to be updated in both places.
 
 ## Development
 

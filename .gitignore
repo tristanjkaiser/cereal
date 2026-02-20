@@ -35,3 +35,4 @@ logs/
 
 # Claude Code
 .claude/
+.mcp.json

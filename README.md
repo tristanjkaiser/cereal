@@ -1,15 +1,14 @@
 # Cereal
 
-> Your Granola meetings, now part of your second brain.
-
-Query your [Granola](https://granola.ai) meeting transcripts directly from Claude using MCP (Model Context Protocol).
+i made this to function as a sort of second brain. it's also a work in progress. if you have ideas of where it could go, please share!
+-tristan 
 
 ## Features
 
 - **Search** across all meeting transcripts and notes
 - **Query by client** - find all meetings with a specific client
 - **Full transcripts** - get complete meeting details on demand
-- **Archive from Claude** - tell Claude to "archive my recent meetings"
+- **Auto-Archive from Claude** - cron job to automatically archive meetings
 - **Auto-client detection** - automatically assigns clients based on meeting titles and attendees
 - **Client context** - store PRDs, estimates, and other docs per client
 - **Linear integration** - pair with Linear MCP for project/issue context

@@ -1,6 +1,7 @@
 # Cereal
 
 i made this to function as a sort of second brain. it's also a work in progress. if you have ideas of where it could go, please share!
+
 -tristan 
 
 ## Features

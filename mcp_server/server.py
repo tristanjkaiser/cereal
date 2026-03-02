@@ -746,6 +746,328 @@ def delete_client_context(context_id: int) -> str:
         return f"Failed to delete context document {context_id}."
 
 
+# To-Do Tools
+
+PRIORITY_LABELS = {0: "None", 1: "Urgent", 2: "High", 3: "Normal", 4: "Low"}
+
+
+def _format_todo(todo: dict) -> str:
+    """Format a single to-do item for display."""
+    status_icons = {"pending": "[ ]", "in_progress": "[~]", "done": "[x]", "archived": "[-]"}
+    icon = status_icons.get(todo['status'], "[ ]")
+    pri = f" P{todo['priority']}" if todo['priority'] else ""
+    cat = f" #{todo['category']}" if todo.get('category') else ""
+    due = f" due:{todo['due_date']}" if todo.get('due_date') else ""
+    meeting = f" (meeting #{todo['meeting_id']})" if todo.get('meeting_id') else ""
+    return f"{icon} **[{todo['id']}]** {todo['title']}{pri}{cat}{due}{meeting}"
+
+
+@mcp.tool()
+def add_todo(
+    client_name: str,
+    title: str,
+    description: str = None,
+    priority: int = 0,
+    due_date: str = None,
+    category: str = None,
+    meeting_id: int = None,
+    source_context: str = None
+) -> str:
+    """Create a to-do item for a client.
+
+    Args:
+        client_name: Name of the client (e.g., "NGynS", "Mothership")
+        title: Short actionable title for the to-do
+        description: Optional longer description or details
+        priority: 0=None, 1=Urgent, 2=High, 3=Normal, 4=Low (matches Linear)
+        due_date: Optional due date in ISO format (YYYY-MM-DD)
+        category: Optional tag like "design", "follow-up", "billing"
+        meeting_id: Optional meeting ID this to-do came from
+        source_context: Optional provenance like "from workshop 2", "per Slack thread"
+
+    Returns:
+        Confirmation with the created to-do ID.
+    """
+    db = get_db()
+
+    client = db.get_client_by_name(client_name)
+    if not client:
+        return f"Client '{client_name}' not found."
+
+    todo = db.create_todo(
+        client_id=client['id'],
+        title=title,
+        description=description,
+        priority=priority,
+        due_date=due_date,
+        category=category,
+        meeting_id=meeting_id,
+        source_context=source_context
+    )
+
+    return f"Created to-do [{todo['id']}] for {client_name}: {title}"
+
+
+@mcp.tool()
+def add_todos_batch(
+    client_name: str,
+    items: list,
+    meeting_id: int = None,
+    source_context: str = None
+) -> str:
+    """Create multiple to-dos at once for a client.
+
+    Use this when extracting action items from a meeting or conversation.
+    Each item needs at minimum a 'title' key.
+
+    Args:
+        client_name: Name of the client
+        items: List of items, each with: title (required), description, priority, due_date, category
+        meeting_id: Optional meeting ID to link all items to
+        source_context: Optional provenance for all items (e.g., "from weekly sync 2026-03-01")
+
+    Returns:
+        Summary of created to-dos with their IDs.
+    """
+    db = get_db()
+
+    client = db.get_client_by_name(client_name)
+    if not client:
+        return f"Client '{client_name}' not found."
+
+    if not items:
+        return "No items provided."
+
+    created = db.batch_create_todos(
+        client_id=client['id'],
+        items=items,
+        meeting_id=meeting_id,
+        source_context=source_context
+    )
+
+    lines = [f"# Created {len(created)} to-dos for {client_name}\n"]
+    for todo in created:
+        lines.append(_format_todo(todo))
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def list_todos(
+    client_name: str = None,
+    status: str = None,
+    category: str = None,
+    include_done: bool = False,
+    limit: int = 50
+) -> str:
+    """List to-do items with filtering.
+
+    With no args, returns all open to-dos across all clients — the default dashboard view.
+
+    Args:
+        client_name: Optional - filter to a specific client
+        status: Optional - filter by status: pending, in_progress, done, archived
+        category: Optional - filter by category tag
+        include_done: If true, include completed/archived items (default false)
+        limit: Maximum number of results (default 50)
+
+    Returns:
+        Formatted list of to-dos grouped by client.
+    """
+    db = get_db()
+
+    client_id = None
+    if client_name:
+        client = db.get_client_by_name(client_name)
+        if not client:
+            return f"Client '{client_name}' not found."
+        client_id = client['id']
+
+    todos = db.list_todos(
+        client_id=client_id,
+        status=status,
+        category=category,
+        include_done=include_done,
+        limit=limit
+    )
+
+    if not todos:
+        scope = f" for {client_name}" if client_name else ""
+        return f"No to-dos found{scope}."
+
+    # Group by client
+    by_client = {}
+    for todo in todos:
+        cname = todo['client_name']
+        if cname not in by_client:
+            by_client[cname] = []
+        by_client[cname].append(todo)
+
+    lines = []
+    for cname, client_todos in by_client.items():
+        lines.append(f"## {cname}\n")
+        for todo in client_todos:
+            lines.append(_format_todo(todo))
+        lines.append("")
+
+    lines.append(f"*{len(todos)} items shown*")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def update_todo(
+    todo_id: int,
+    title: str = None,
+    description: str = None,
+    status: str = None,
+    priority: int = None,
+    due_date: str = None,
+    category: str = None,
+    meeting_id: int = None,
+    source_context: str = None
+) -> str:
+    """Update any fields on a to-do item.
+
+    Only provided fields are changed. Setting status to 'done' auto-sets completed_at.
+    Reopening (status='pending' or 'in_progress') clears completed_at.
+
+    Args:
+        todo_id: Database ID of the to-do (shown in brackets in listings)
+        title: New title
+        description: New description
+        status: New status: pending, in_progress, done, archived
+        priority: New priority: 0=None, 1=Urgent, 2=High, 3=Normal, 4=Low
+        due_date: New due date (ISO YYYY-MM-DD)
+        category: New category tag
+        meeting_id: Link to a meeting ID
+        source_context: Update provenance text
+
+    Returns:
+        Confirmation of update.
+    """
+    db = get_db()
+
+    todo = db.get_todo(todo_id)
+    if not todo:
+        return f"To-do with ID {todo_id} not found."
+
+    success = db.update_todo(
+        todo_id=todo_id,
+        title=title,
+        description=description,
+        status=status,
+        priority=priority,
+        due_date=due_date,
+        category=category,
+        meeting_id=meeting_id,
+        source_context=source_context
+    )
+
+    if success:
+        return f"Updated to-do [{todo_id}] '{todo['title']}' for {todo['client_name']}."
+    else:
+        return "No changes made (no update fields provided)."
+
+
+@mcp.tool()
+def complete_todo(todo_id: int) -> str:
+    """Mark a to-do as done.
+
+    Args:
+        todo_id: Database ID of the to-do (shown in brackets in listings)
+
+    Returns:
+        Confirmation of completion.
+    """
+    db = get_db()
+
+    todo = db.get_todo(todo_id)
+    if not todo:
+        return f"To-do with ID {todo_id} not found."
+
+    success = db.complete_todo(todo_id)
+
+    if success:
+        return f"Completed to-do [{todo_id}] '{todo['title']}' for {todo['client_name']}."
+    else:
+        return f"Failed to complete to-do {todo_id}."
+
+
+@mcp.tool()
+def delete_todo(todo_id: int) -> str:
+    """Permanently remove a to-do item.
+
+    Args:
+        todo_id: Database ID of the to-do to delete
+
+    Returns:
+        Confirmation of deletion.
+    """
+    db = get_db()
+
+    todo = db.get_todo(todo_id)
+    if not todo:
+        return f"To-do with ID {todo_id} not found."
+
+    success = db.delete_todo(todo_id)
+
+    if success:
+        return f"Deleted to-do [{todo_id}] '{todo['title']}' from {todo['client_name']}."
+    else:
+        return f"Failed to delete to-do {todo_id}."
+
+
+@mcp.tool()
+def list_overdue_todos(client_name: str = None, limit: int = 50) -> str:
+    """Show overdue to-do items across all clients.
+
+    Returns open to-dos where the due date has passed — useful for
+    proactively surfacing what needs attention.
+
+    Args:
+        client_name: Optional - filter to a specific client
+        limit: Maximum number of results (default 50)
+
+    Returns:
+        List of overdue to-dos grouped by client.
+    """
+    db = get_db()
+
+    client_id = None
+    if client_name:
+        client = db.get_client_by_name(client_name)
+        if not client:
+            return f"Client '{client_name}' not found."
+        client_id = client['id']
+
+    todos = db.list_todos(
+        client_id=client_id,
+        overdue_only=True,
+        limit=limit
+    )
+
+    if not todos:
+        scope = f" for {client_name}" if client_name else ""
+        return f"No overdue to-dos{scope}."
+
+    by_client = {}
+    for todo in todos:
+        cname = todo['client_name']
+        if cname not in by_client:
+            by_client[cname] = []
+        by_client[cname].append(todo)
+
+    lines = [f"# Overdue To-Dos\n"]
+    for cname, client_todos in by_client.items():
+        lines.append(f"## {cname}\n")
+        for todo in client_todos:
+            lines.append(_format_todo(todo))
+        lines.append("")
+
+    lines.append(f"*{len(todos)} overdue items*")
+    return "\n".join(lines)
+
+
 # Client Management Tools
 
 @mcp.tool()

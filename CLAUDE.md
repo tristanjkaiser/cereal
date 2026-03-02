@@ -39,10 +39,11 @@ Granola (local app) → GranolaClient → PostgreSQL ← MCP Server → Claude D
 | `scripts/timeline_migration.sql` | Timeline tables migration |
 | `scripts/auto_archive.py` | Automated meeting archival script |
 | `scripts/auto_archive_ctl.sh` | launchd enable/disable/status helper |
+| `scripts/todos_migration.sql` | To-do table migration |
 
 ## Database Schema
 
-Core tables: `clients`, `meeting_series`, `meetings`, `client_context`, `client_aliases`, `client_integrations`
+Core tables: `clients`, `meeting_series`, `meetings`, `client_context`, `client_aliases`, `client_integrations`, `client_todos`
 
 Timeline tables: `timelines`, `timeline_phases`, `timeline_milestones`, `timeline_workshops`, `timeline_snapshots`, `timeline_linear_mappings`
 
@@ -71,6 +72,18 @@ The `client_integrations` table stores:
 - `external_id` - ID in the external system (e.g., Linear team ID, Slack internal channel ID)
 - `external_name` - human-readable name in external system
 - `metadata` - JSONB for additional structured data (e.g., `{"team_key": "WANDER"}` for Linear, `{"external_channel_id": "..."}` for Slack)
+
+The `client_todos` table stores:
+- `client_id` - foreign key to clients
+- `title` - short actionable title
+- `description` - optional longer details
+- `status` - pending, in_progress, done, archived
+- `priority` - 0=None, 1=Urgent, 2=High, 3=Normal, 4=Low (matches Linear)
+- `due_date` - optional due date
+- `completed_at` - auto-managed timestamp (set on done, cleared on reopen)
+- `category` - agent-assigned freeform tag ("design", "follow-up", "billing")
+- `meeting_id` - optional link to source meeting
+- `source_context` - free-text provenance ("from workshop 2", "per Slack thread")
 
 Full-text search indexes exist on transcript, notes, summary, and context fields.
 
@@ -127,6 +140,18 @@ The server exposes these tools to Claude:
 | `search_client_context` | Full-text search across context docs |
 | `update_client_context` | Update existing context doc |
 | `delete_client_context` | Delete a context doc |
+
+### To-Do Tools
+
+| Tool | Description |
+|------|-------------|
+| `add_todo` | Create a to-do for a client (agent infers priority/category) |
+| `add_todos_batch` | Create multiple to-dos at once (e.g., action items from a meeting) |
+| `list_todos` | List items with filtering; no args = open items across all clients |
+| `update_todo` | Update any fields on a to-do |
+| `complete_todo` | Mark a to-do as done |
+| `delete_todo` | Permanently remove a to-do |
+| `list_overdue_todos` | Show overdue items across all clients |
 
 ### Client Management Tools
 

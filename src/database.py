@@ -1018,6 +1018,266 @@ class DatabaseManager:
             cursor.execute("DELETE FROM client_context WHERE id = %s", (context_id,))
             return cursor.rowcount > 0
 
+    # To-do methods
+
+    def create_todo(
+        self,
+        client_id: int,
+        title: str,
+        description: Optional[str] = None,
+        priority: int = 0,
+        due_date: Optional[str] = None,
+        category: Optional[str] = None,
+        meeting_id: Optional[int] = None,
+        source_context: Optional[str] = None
+    ) -> Dict:
+        """Create a single to-do item. Returns the created row."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO client_todos
+                    (client_id, title, description, priority, due_date, category, meeting_id, source_context)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING *
+            """, (client_id, title, description, priority, due_date, category, meeting_id, source_context))
+            return cursor.fetchone()
+
+    def batch_create_todos(
+        self,
+        client_id: int,
+        items: List[Dict],
+        meeting_id: Optional[int] = None,
+        source_context: Optional[str] = None
+    ) -> List[Dict]:
+        """
+        Create multiple to-do items in one transaction.
+
+        Args:
+            client_id: Client to create items for
+            items: List of dicts with keys: title (required), description, priority, due_date, category
+            meeting_id: Optional meeting to link all items to
+            source_context: Optional provenance for all items
+
+        Returns:
+            List of created rows
+        """
+        created = []
+        with self.get_cursor() as cursor:
+            for item in items:
+                cursor.execute("""
+                    INSERT INTO client_todos
+                        (client_id, title, description, priority, due_date, category, meeting_id, source_context)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING *
+                """, (
+                    client_id,
+                    item['title'],
+                    item.get('description'),
+                    item.get('priority', 0),
+                    item.get('due_date'),
+                    item.get('category'),
+                    item.get('meeting_id', meeting_id),
+                    item.get('source_context', source_context)
+                ))
+                created.append(cursor.fetchone())
+        return created
+
+    def get_todo(self, todo_id: int) -> Optional[Dict]:
+        """Get a single to-do by ID with client name."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT t.*, c.name as client_name
+                FROM client_todos t
+                JOIN clients c ON t.client_id = c.id
+                WHERE t.id = %s
+            """, (todo_id,))
+            return cursor.fetchone()
+
+    def list_todos(
+        self,
+        client_id: Optional[int] = None,
+        status: Optional[str] = None,
+        priority: Optional[int] = None,
+        category: Optional[str] = None,
+        include_done: bool = False,
+        overdue_only: bool = False,
+        limit: int = 50
+    ) -> List[Dict]:
+        """
+        List to-dos with flexible filtering.
+
+        Args:
+            client_id: Filter by client
+            status: Filter by status (pending, in_progress, done, archived)
+            priority: Filter by priority level
+            category: Filter by category
+            include_done: If True, include done/archived items (default False)
+            overdue_only: If True, only items past due_date that aren't done
+            limit: Max results
+
+        Returns:
+            List of to-do items with client names
+        """
+        query = """
+            SELECT t.*, c.name as client_name
+            FROM client_todos t
+            JOIN clients c ON t.client_id = c.id
+            WHERE 1=1
+        """
+        params: List[Any] = []
+
+        if client_id is not None:
+            query += " AND t.client_id = %s"
+            params.append(client_id)
+
+        if status is not None:
+            query += " AND t.status = %s"
+            params.append(status)
+        elif not include_done:
+            query += " AND t.status NOT IN ('done', 'archived')"
+
+        if priority is not None:
+            query += " AND t.priority = %s"
+            params.append(priority)
+
+        if category is not None:
+            query += " AND t.category = %s"
+            params.append(category)
+
+        if overdue_only:
+            query += " AND t.due_date < CURRENT_DATE AND t.status NOT IN ('done', 'archived')"
+
+        query += " ORDER BY t.priority ASC NULLS LAST, t.due_date ASC NULLS LAST, t.created_at DESC"
+        query += " LIMIT %s"
+        params.append(limit)
+
+        with self.get_cursor() as cursor:
+            cursor.execute(query, params)
+            return cursor.fetchall()
+
+    def update_todo(
+        self,
+        todo_id: int,
+        title: Optional[str] = None,
+        description: Optional[str] = None,
+        status: Optional[str] = None,
+        priority: Optional[int] = None,
+        due_date: Optional[str] = None,
+        category: Optional[str] = None,
+        meeting_id: Optional[int] = None,
+        source_context: Optional[str] = None
+    ) -> bool:
+        """
+        Update a to-do item. Only provided fields are changed.
+        Auto-sets completed_at when status transitions to 'done',
+        clears it if reopened.
+
+        Returns:
+            True if update was successful
+        """
+        updates = []
+        params = []
+
+        if title is not None:
+            updates.append("title = %s")
+            params.append(title)
+        if description is not None:
+            updates.append("description = %s")
+            params.append(description)
+        if status is not None:
+            updates.append("status = %s")
+            params.append(status)
+            if status == 'done':
+                updates.append("completed_at = NOW()")
+            elif status in ('pending', 'in_progress'):
+                updates.append("completed_at = NULL")
+        if priority is not None:
+            updates.append("priority = %s")
+            params.append(priority)
+        if due_date is not None:
+            updates.append("due_date = %s")
+            params.append(due_date)
+        if category is not None:
+            updates.append("category = %s")
+            params.append(category)
+        if meeting_id is not None:
+            updates.append("meeting_id = %s")
+            params.append(meeting_id)
+        if source_context is not None:
+            updates.append("source_context = %s")
+            params.append(source_context)
+
+        if not updates:
+            return False
+
+        updates.append("updated_at = NOW()")
+        params.append(todo_id)
+
+        with self.get_cursor() as cursor:
+            cursor.execute(f"""
+                UPDATE client_todos
+                SET {', '.join(updates)}
+                WHERE id = %s
+            """, params)
+            return cursor.rowcount > 0
+
+    def complete_todo(self, todo_id: int) -> bool:
+        """Mark a single to-do as done. Returns True if successful."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                UPDATE client_todos
+                SET status = 'done', completed_at = NOW(), updated_at = NOW()
+                WHERE id = %s
+            """, (todo_id,))
+            return cursor.rowcount > 0
+
+    def bulk_complete_todos(self, todo_ids: List[int]) -> int:
+        """Mark multiple to-dos as done. Returns count of updated rows."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                UPDATE client_todos
+                SET status = 'done', completed_at = NOW(), updated_at = NOW()
+                WHERE id = ANY(%s)
+            """, (todo_ids,))
+            return cursor.rowcount
+
+    def delete_todo(self, todo_id: int) -> bool:
+        """Hard delete a to-do. Returns True if deleted."""
+        with self.get_cursor() as cursor:
+            cursor.execute("DELETE FROM client_todos WHERE id = %s", (todo_id,))
+            return cursor.rowcount > 0
+
+    def search_todos(self, query: str, client_id: Optional[int] = None, limit: int = 20) -> List[Dict]:
+        """
+        Search to-dos by title/description using ILIKE.
+
+        Args:
+            query: Search term
+            client_id: Optional filter by client
+            limit: Max results
+
+        Returns:
+            Matching to-do items with client names
+        """
+        search_pattern = f"%{query}%"
+        sql = """
+            SELECT t.*, c.name as client_name
+            FROM client_todos t
+            JOIN clients c ON t.client_id = c.id
+            WHERE (t.title ILIKE %s OR t.description ILIKE %s)
+        """
+        params: List[Any] = [search_pattern, search_pattern]
+
+        if client_id is not None:
+            sql += " AND t.client_id = %s"
+            params.append(client_id)
+
+        sql += " ORDER BY t.created_at DESC LIMIT %s"
+        params.append(limit)
+
+        with self.get_cursor() as cursor:
+            cursor.execute(sql, params)
+            return cursor.fetchall()
+
     # Timeline methods
 
     def create_timeline(

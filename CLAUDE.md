@@ -71,7 +71,7 @@ The `client_integrations` table stores:
 - `integration_type` - type of integration ('linear_team', 'slack', etc.)
 - `external_id` - ID in the external system (e.g., Linear team ID, Slack internal channel ID)
 - `external_name` - human-readable name in external system
-- `metadata` - JSONB for additional structured data (e.g., `{"team_key": "WANDER"}` for Linear, `{"external_channel_id": "..."}` for Slack)
+- `metadata` - JSONB for additional structured data (e.g., `{"team_key": "ACME"}` for Linear, `{"external_channel_id": "..."}` for Slack)
 
 The `client_todos` table stores:
 - `client_id` - foreign key to clients
@@ -95,7 +95,7 @@ When `archive_new_meetings` runs, it automatically detects clients for each meet
 1. **Client aliases** (highest priority) - user-defined mappings via `merge_clients` or `add_client_alias`
 2. Known client name appears in title (case-insensitive)
 3. Title pattern extraction:
-   - `{Client} x Goji` → Client
+   - `{Client} x {YourCompany}` → Client
    - `{Client}: ...` → Client
    - `Record {Client} ...` → Client
 4. External attendee company (if exactly one external company in attendees)
@@ -107,7 +107,7 @@ When `archive_new_meetings` runs, it automatically detects clients for each meet
 - `get_client_aliases()` in [database.py](src/database.py) - fetches alias mappings
 
 **Configuration:**
-- `INTERNAL_DOMAIN` env var (default: `gojilabs.com`) - emails from this domain are internal
+- `INTERNAL_DOMAIN` env var - your company's email domain; emails from this domain are treated as internal
 
 New clients are auto-created via `get_or_create_client()`. Meetings without detected clients have `client_id = NULL`.
 
@@ -210,7 +210,7 @@ First arg is the internal channel ID, second (optional) is the external/client-f
 
 | Tool | Description |
 |------|-------------|
-| `create_timeline` | Create a project timeline for a client (auto-creates standard Goji phases) |
+| `create_timeline` | Create a project timeline for a client (auto-creates standard phases) |
 | `get_timeline` | Get full timeline with phases, milestones, workshops, and status |
 | `list_timelines` | List all timelines, optionally filtered by client or status |
 | `update_phase` | Update phase status, dates, or link to Linear project |
@@ -222,7 +222,7 @@ First arg is the internal channel ID, second (optional) is the external/client-f
 | `assess_project_health` | Cross-reference timeline + meetings + Linear for health assessment |
 | `get_project_snapshots` | Historical health assessments for a project |
 
-**Standard Goji Lifecycle (auto-created with `create_timeline`):**
+**Standard Lifecycle (auto-created with `create_timeline`):**
 ```
 Strategy Sprint (4 workshops)
 Design Phase
@@ -306,7 +306,7 @@ This starts an interactive session where you can test tools directly.
 ### Environment variables
 
 - `DATABASE_URL` - PostgreSQL connection string (default: `postgresql://localhost:5432/cereal`)
-- `INTERNAL_DOMAIN` - Your company's email domain for client detection (default: `gojilabs.com`)
+- `INTERNAL_DOMAIN` - Your company's email domain for client detection (e.g., `yourcompany.com`)
 
 ### Claude Desktop config
 

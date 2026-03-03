@@ -751,15 +751,54 @@ def delete_client_context(context_id: int) -> str:
 PRIORITY_LABELS = {0: "None", 1: "Urgent", 2: "High", 3: "Normal", 4: "Low"}
 
 
-def _format_todo(todo: dict) -> str:
-    """Format a single to-do item for display."""
-    status_icons = {"pending": "[ ]", "in_progress": "[~]", "done": "[x]", "archived": "[-]"}
-    icon = status_icons.get(todo['status'], "[ ]")
-    pri = f" P{todo['priority']}" if todo['priority'] else ""
-    cat = f" #{todo['category']}" if todo.get('category') else ""
-    due = f" due:{todo['due_date']}" if todo.get('due_date') else ""
-    meeting = f" (meeting #{todo['meeting_id']})" if todo.get('meeting_id') else ""
-    return f"{icon} **[{todo['id']}]** {todo['title']}{pri}{cat}{due}{meeting}"
+def _format_todos_table(todos: list, overdue_mode: bool = False) -> str:
+    """Format a list of to-dos as a markdown table.
+
+    Args:
+        todos: List of todo dicts (must all be for the same client group or ungrouped).
+        overdue_mode: If True, tag overdue items in the Due column.
+
+    Returns:
+        Markdown table string.
+    """
+    status_icons = {"pending": "\u2610", "in_progress": "\u25d1", "done": "\u2713", "archived": "\u2014"}
+    priority_labels = {0: "", 1: "\U0001f534 Urgent", 2: "\U0001f7e0 High", 3: "Normal", 4: "Low"}
+
+    header = "| Status | ID | Title | Priority | Category | Due | Source |"
+    separator = "|--------|-----|-------|----------|----------|-----|--------|"
+    rows = [header, separator]
+
+    today = datetime.now().date()
+
+    for todo in todos:
+        icon = status_icons.get(todo['status'], "\u2610")
+        pri = priority_labels.get(todo.get('priority', 0), "")
+        cat = todo.get('category') or ""
+
+        # Format due date compactly
+        due = ""
+        if todo.get('due_date'):
+            try:
+                due_date = todo['due_date']
+                if isinstance(due_date, str):
+                    due_date = datetime.strptime(due_date, "%Y-%m-%d").date()
+                due = due_date.strftime("%b %-d")
+                if overdue_mode or (due_date < today and todo['status'] not in ('done', 'archived')):
+                    due = f"\u26a0\ufe0f {due}"
+            except (ValueError, TypeError):
+                due = str(todo['due_date'])
+
+        # Source column: meeting ref or source_context, truncated
+        source = ""
+        if todo.get('meeting_id'):
+            source = f"mtg #{todo['meeting_id']}"
+        elif todo.get('source_context'):
+            ctx = todo['source_context']
+            source = ctx if len(ctx) <= 20 else ctx[:18] + ".."
+
+        rows.append(f"| {icon} | {todo['id']} | {todo['title']} | {pri} | {cat} | {due} | {source} |")
+
+    return "\n".join(rows)
 
 
 @mcp.tool()
@@ -846,8 +885,7 @@ def add_todos_batch(
     )
 
     lines = [f"# Created {len(created)} to-dos for {client_name}\n"]
-    for todo in created:
-        lines.append(_format_todo(todo))
+    lines.append(_format_todos_table(created))
 
     return "\n".join(lines)
 
@@ -905,9 +943,8 @@ def list_todos(
 
     lines = []
     for cname, client_todos in by_client.items():
-        lines.append(f"## {cname}\n")
-        for todo in client_todos:
-            lines.append(_format_todo(todo))
+        lines.append(f"## {cname} ({len(client_todos)} open)\n")
+        lines.append(_format_todos_table(client_todos))
         lines.append("")
 
     lines.append(f"*{len(todos)} items shown*")
@@ -1059,12 +1096,301 @@ def list_overdue_todos(client_name: str = None, limit: int = 50) -> str:
 
     lines = [f"# Overdue To-Dos\n"]
     for cname, client_todos in by_client.items():
-        lines.append(f"## {cname}\n")
-        for todo in client_todos:
-            lines.append(_format_todo(todo))
+        lines.append(f"## {cname} ({len(client_todos)} overdue)\n")
+        lines.append(_format_todos_table(client_todos, overdue_mode=True))
         lines.append("")
 
     lines.append(f"*{len(todos)} overdue items*")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def view_todos(client_name: str = None, include_done: bool = False) -> str:
+    """Generate an HTML snapshot of to-dos and open it in the browser.
+
+    Creates a visual dashboard grouped by client with color-coded priorities,
+    category pills, and overdue highlighting. Read-only snapshot — not interactive.
+
+    Args:
+        client_name: Optional - filter to a specific client
+        include_done: If true, include completed/archived items (default false)
+
+    Returns:
+        Confirmation message with item count.
+    """
+    import webbrowser
+    db = get_db()
+
+    client_id = None
+    if client_name:
+        client = db.get_client_by_name(client_name)
+        if not client:
+            return f"Client '{client_name}' not found."
+        client_id = client['id']
+
+    todos = db.list_todos(
+        client_id=client_id,
+        include_done=include_done,
+        limit=200
+    )
+
+    if not todos:
+        scope = f" for {client_name}" if client_name else ""
+        return f"No to-dos found{scope}."
+
+    # Group by client
+    by_client = {}
+    for todo in todos:
+        cname = todo['client_name']
+        if cname not in by_client:
+            by_client[cname] = []
+        by_client[cname].append(todo)
+
+    today = datetime.now().date()
+    generated_at = datetime.now().strftime("%b %-d, %Y at %-I:%M %p")
+
+    # Build HTML
+    html = _build_todos_html(by_client, today, generated_at)
+
+    out_path = "/tmp/cereal-todos.html"
+    with open(out_path, "w") as f:
+        f.write(html)
+
+    webbrowser.open(f"file://{out_path}")
+
+    total = len(todos)
+    client_count = len(by_client)
+    return f"Opened dashboard in browser with {total} items across {client_count} client{'s' if client_count != 1 else ''}."
+
+
+def _build_todos_html(by_client: dict, today, generated_at: str) -> str:
+    """Build self-contained HTML for the to-do dashboard."""
+    priority_colors = {1: "#dc2626", 2: "#ea580c", 3: "#6b7280", 4: "#3b82f6"}
+    priority_labels = {0: "", 1: "Urgent", 2: "High", 3: "Normal", 4: "Low"}
+    status_icons = {"pending": "&#9744;", "in_progress": "&#9684;", "done": "&#10003;", "archived": "&mdash;"}
+
+    cards_html = ""
+    for cname, todos in by_client.items():
+        open_count = sum(1 for t in todos if t['status'] not in ('done', 'archived'))
+        rows = ""
+        for todo in todos:
+            icon = status_icons.get(todo['status'], "&#9744;")
+            done_class = " done" if todo['status'] in ('done', 'archived') else ""
+
+            # Priority badge
+            pri_val = todo.get('priority', 0)
+            pri_label = priority_labels.get(pri_val, "")
+            pri_color = priority_colors.get(pri_val, "#6b7280")
+            pri_html = f'<span class="badge" style="background:{pri_color}">{pri_label}</span>' if pri_label else ""
+
+            # Category pill
+            cat = todo.get('category') or ""
+            cat_html = f'<span class="cat">{cat}</span>' if cat else ""
+
+            # Due date
+            due_html = ""
+            overdue = False
+            if todo.get('due_date'):
+                try:
+                    due_date = todo['due_date']
+                    if isinstance(due_date, str):
+                        due_date = datetime.strptime(due_date, "%Y-%m-%d").date()
+                    due_str = due_date.strftime("%b %-d")
+                    if due_date < today and todo['status'] not in ('done', 'archived'):
+                        overdue = True
+                        due_html = f'<span class="overdue">&#9888;&#65039; {due_str}</span>'
+                    else:
+                        due_html = due_str
+                except (ValueError, TypeError):
+                    due_html = str(todo['due_date'])
+
+            # Source
+            source = ""
+            if todo.get('meeting_id'):
+                source = f"mtg #{todo['meeting_id']}"
+            elif todo.get('source_context'):
+                ctx = todo['source_context']
+                source = ctx if len(ctx) <= 25 else ctx[:23] + ".."
+
+            row_class = "overdue-row" if overdue else ""
+
+            rows += f"""<tr class="{row_class}{done_class}">
+  <td class="status">{icon}</td>
+  <td class="id">{todo['id']}</td>
+  <td class="title">{_html_escape(todo['title'])}</td>
+  <td>{pri_html}</td>
+  <td>{cat_html}</td>
+  <td class="due">{due_html}</td>
+  <td class="source">{_html_escape(source)}</td>
+</tr>"""
+
+        cards_html += f"""<div class="client-card">
+  <h2>{_html_escape(cname)} <span class="count">{open_count} open</span></h2>
+  <table>
+    <thead>
+      <tr><th>Status</th><th>ID</th><th>Title</th><th>Priority</th><th>Category</th><th>Due</th><th>Source</th></tr>
+    </thead>
+    <tbody>{rows}</tbody>
+  </table>
+</div>"""
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cereal &mdash; To-Dos</title>
+<style>
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f8f9fa; color: #1a1a2e; padding: 2rem; }}
+  .header {{ max-width: 960px; margin: 0 auto 1.5rem; display: flex; justify-content: space-between; align-items: baseline; }}
+  .header h1 {{ font-size: 1.5rem; font-weight: 700; }}
+  .header .timestamp {{ font-size: 0.8rem; color: #6b7280; }}
+  .client-card {{ max-width: 960px; margin: 0 auto 1.5rem; background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); padding: 1.25rem 1.5rem; }}
+  .client-card h2 {{ font-size: 1.1rem; font-weight: 600; margin-bottom: 0.75rem; }}
+  .client-card h2 .count {{ font-weight: 400; font-size: 0.85rem; color: #6b7280; }}
+  table {{ width: 100%; border-collapse: collapse; font-size: 0.875rem; }}
+  thead th {{ text-align: left; font-weight: 500; color: #6b7280; padding: 0.4rem 0.5rem; border-bottom: 1px solid #e5e7eb; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; }}
+  tbody td {{ padding: 0.5rem 0.5rem; border-bottom: 1px solid #f3f4f6; vertical-align: middle; }}
+  .status {{ font-size: 1.1rem; text-align: center; width: 3rem; }}
+  .id {{ color: #9ca3af; font-size: 0.8rem; width: 2.5rem; }}
+  .title {{ font-weight: 500; }}
+  .due {{ white-space: nowrap; }}
+  .source {{ color: #9ca3af; font-size: 0.8rem; }}
+  .badge {{ display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px; color: #fff; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }}
+  .cat {{ display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px; background: #e0e7ff; color: #4338ca; font-size: 0.7rem; font-weight: 500; }}
+  .overdue {{ color: #dc2626; font-weight: 600; }}
+  .overdue-row {{ background: #fef2f2; }}
+  .done {{ opacity: 0.45; }}
+  tr.done .title {{ text-decoration: line-through; }}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Cereal &mdash; To-Dos</h1>
+  <span class="timestamp">Snapshot: {generated_at}</span>
+</div>
+{cards_html}
+</body>
+</html>"""
+
+
+def _html_escape(text: str) -> str:
+    """Minimal HTML escaping for user content."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+def _match_todos(todos: list, search: str) -> list:
+    """Match todos by title substring. Exact match takes priority over partial."""
+    search_lower = search.lower()
+    exact = [t for t in todos if t['title'].lower() == search_lower]
+    if exact:
+        return exact
+    return [t for t in todos if search_lower in t['title'].lower()]
+
+
+@mcp.tool()
+def batch_update_todos(
+    client_name: str,
+    operations: list,
+    source_context: str = None
+) -> str:
+    """Apply multiple to-do operations in one call — complete, update, and add.
+
+    Designed for voice workflows where a single narration produces several
+    changes. Matches existing to-dos by title substring (no ID lookup needed).
+
+    Args:
+        client_name: Name of the client (e.g., "NGynS", "Mothership")
+        operations: List of operations, each a dict with an "action" key:
+            - complete: {"action": "complete", "search": "<title substring>"}
+            - update:   {"action": "update", "search": "<title substring>", ...fields to change}
+                        Updatable fields: title, description, priority, due_date, category, status
+            - add:      {"action": "add", "title": "...", "priority": 0, "due_date": "...", "category": "..."}
+        source_context: Optional provenance applied to all add/update operations
+
+    Returns:
+        Markdown summary table of results per operation.
+    """
+    db = get_db()
+
+    client = db.get_client_by_name(client_name)
+    if not client:
+        return f"Client '{client_name}' not found."
+
+    if not operations:
+        return "No operations provided."
+
+    # Load open todos once for matching
+    open_todos = db.list_todos(client_id=client['id'], include_done=False, limit=200)
+
+    results = []
+    for i, op in enumerate(operations, 1):
+        action = op.get('action', '').lower()
+
+        if action == 'add':
+            title = op.get('title')
+            if not title:
+                results.append((i, 'add', 'error', '', '', 'missing title'))
+                continue
+            todo = db.create_todo(
+                client_id=client['id'],
+                title=title,
+                description=op.get('description'),
+                priority=op.get('priority', 0),
+                due_date=op.get('due_date'),
+                category=op.get('category'),
+                meeting_id=op.get('meeting_id'),
+                source_context=op.get('source_context', source_context)
+            )
+            # Add to open_todos so subsequent ops can match it
+            todo['client_name'] = client_name
+            open_todos.append(todo)
+            results.append((i, 'add', 'created', todo['id'], todo['title'], ''))
+
+        elif action in ('complete', 'update'):
+            search = op.get('search', '')
+            if not search:
+                results.append((i, action, 'error', '', '', 'missing search'))
+                continue
+            matches = _match_todos(open_todos, search)
+            if len(matches) == 0:
+                results.append((i, action, 'no_match', '', search, f'no open todo matching "{search}"'))
+            elif len(matches) > 1:
+                candidates = ", ".join(f"[{m['id']}] {m['title']}" for m in matches[:5])
+                results.append((i, action, 'ambiguous', '', search, f'{len(matches)} matches: {candidates}'))
+            else:
+                todo = matches[0]
+                if action == 'complete':
+                    db.complete_todo(todo['id'])
+                    # Remove from open_todos so it won't match again
+                    open_todos = [t for t in open_todos if t['id'] != todo['id']]
+                    results.append((i, 'complete', 'done', todo['id'], todo['title'], ''))
+                else:
+                    fields = {}
+                    for key in ('title', 'description', 'status', 'priority', 'due_date', 'category'):
+                        if key in op:
+                            fields[key] = op[key]
+                    if source_context and 'source_context' not in op:
+                        fields['source_context'] = source_context
+                    elif 'source_context' in op:
+                        fields['source_context'] = op['source_context']
+                    details = ", ".join(f"{k}={v}" for k, v in fields.items())
+                    db.update_todo(todo_id=todo['id'], **fields)
+                    results.append((i, 'update', 'done', todo['id'], todo['title'], details))
+        else:
+            results.append((i, action or '?', 'error', '', '', f'unknown action "{action}"'))
+
+    # Build summary
+    ok = sum(1 for r in results if r[2] in ('done', 'created'))
+    total = len(results)
+    lines = [f"# Batch Update: {client_name} ({total} operations)\n"]
+    lines.append("| # | Action | Result | ID | Title | Details |")
+    lines.append("|---|--------|--------|----|-------|---------|")
+    for num, action, result, tid, title, details in results:
+        tid_str = str(tid) if tid else ""
+        lines.append(f"| {num} | {action} | {result} | {tid_str} | {title} | {details} |")
+    lines.append(f"\n*{ok}/{total} operations successful*")
     return "\n".join(lines)
 
 

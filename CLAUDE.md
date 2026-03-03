@@ -152,6 +152,8 @@ The server exposes these tools to Claude:
 | `complete_todo` | Mark a to-do as done |
 | `delete_todo` | Permanently remove a to-do |
 | `list_overdue_todos` | Show overdue items across all clients |
+| `view_todos` | Generate HTML dashboard of to-dos and open in browser |
+| `batch_update_todos` | Complete, update, and add to-dos in one call (title-based matching, no ID lookup) |
 
 ### Client Management Tools
 

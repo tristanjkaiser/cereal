@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+{% block head_extra %}{% endblock %}
+<title>{% block title %}Cereal{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<div class="app-layout">
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <a href="{{ url_for('dashboard.index') }}">Cereal</a>
+    </div>
+    <nav class="sidebar-nav">
+      <a href="{{ url_for('dashboard.index') }}" class="sidebar-link {% if request.blueprint in ('dashboard',) %}active{% endif %}">
+        Home
+      </a>
+      <a href="{{ url_for('todos.index') }}" class="sidebar-link {% if request.blueprint == 'todos' %}active{% endif %}">
+        To-Dos
+      </a>
+      <a href="{{ url_for('attention.index') }}" class="sidebar-link {% if request.blueprint == 'attention' %}active{% endif %}">
+        Attention{% if attention_count %}<span class="nav-badge">{{ attention_count }}</span>{% endif %}
+      </a>
+      <a href="{{ url_for('timelines.overview') }}" class="sidebar-link {% if request.blueprint == 'timelines' %}active{% endif %}">
+        Timelines
+      </a>
+    </nav>
+    <div class="sidebar-section">
+      <div class="sidebar-section-title">Clients</div>
+      {% for c in nav_clients %}
+      <a href="{{ url_for('clients.detail', client_name=c.name) }}"
+         class="sidebar-link sidebar-client {% if request.blueprint == 'clients' and request.view_args.get('client_name') == c.name %}active{% endif %}">
+        {{ c.name }}
+      </a>
+      {% endfor %}
+    </div>
+  </aside>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</div>
+</body>
+</html>

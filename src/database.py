@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 try:
     import psycopg2
     from psycopg2.extras import RealDictCursor, Json
+    from psycopg2.pool import ThreadedConnectionPool
     PSYCOPG2_AVAILABLE = True
 except ImportError:
     PSYCOPG2_AVAILABLE = False
@@ -24,13 +25,15 @@ except ImportError:
 class DatabaseManager:
     """Manages PostgreSQL database connections and operations."""
 
-    def __init__(self, database_url: Optional[str] = None):
+    def __init__(self, database_url: Optional[str] = None, pool_size: Optional[int] = None):
         """
         Initialize database manager.
 
         Args:
             database_url: PostgreSQL connection string.
                          If None, reads from DATABASE_URL env var.
+            pool_size: If set, use a threaded connection pool of this size.
+                      None (default) uses single connections (existing behavior).
         """
         if not PSYCOPG2_AVAILABLE:
             raise ImportError(
@@ -45,18 +48,38 @@ class DatabaseManager:
                 "or pass database_url parameter."
             )
 
+        self._pool = None
+        if pool_size:
+            self._pool = ThreadedConnectionPool(1, pool_size, self.database_url)
+
     @contextmanager
     def get_connection(self):
         """Get a database connection as a context manager."""
-        conn = psycopg2.connect(self.database_url)
-        try:
-            yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+        if self._pool:
+            conn = self._pool.getconn()
+            try:
+                yield conn
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                self._pool.putconn(conn)
+        else:
+            conn = psycopg2.connect(self.database_url)
+            try:
+                yield conn
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
+
+    def close(self):
+        """Shut down the connection pool if active."""
+        if self._pool:
+            self._pool.closeall()
 
     @contextmanager
     def get_cursor(self, dict_cursor: bool = True):
@@ -817,6 +840,32 @@ class DatabaseManager:
             """)
             return cursor.fetchall()
 
+    def get_client_dashboard_summary(self) -> List[Dict]:
+        """Get all clients with meeting counts and last meeting date."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT c.id, c.name, c.slug, c.notes, c.created_at,
+                       COUNT(m.id) as meeting_count,
+                       MAX(m.meeting_date) as last_meeting_date
+                FROM clients c
+                LEFT JOIN meetings m ON c.id = m.client_id
+                GROUP BY c.id
+                ORDER BY c.name
+            """)
+            return cursor.fetchall()
+
+    def get_todo_counts_by_client(self) -> List[Dict]:
+        """Get open and overdue todo counts per client."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT t.client_id,
+                       COUNT(*) FILTER (WHERE t.status NOT IN ('done','archived')) as open_count,
+                       COUNT(*) FILTER (WHERE t.status NOT IN ('done','archived') AND t.due_date < CURRENT_DATE) as overdue_count
+                FROM client_todos t
+                GROUP BY t.client_id
+            """)
+            return cursor.fetchall()
+
     def get_recent_meetings(
         self,
         days: int = 7,
@@ -1118,9 +1167,11 @@ class DatabaseManager:
             List of to-do items with client names
         """
         query = """
-            SELECT t.*, c.name as client_name
+            SELECT t.*, c.name as client_name,
+                   m.title as meeting_title, m.meeting_date as meeting_date_ref
             FROM client_todos t
             JOIN clients c ON t.client_id = c.id
+            LEFT JOIN meetings m ON t.meeting_id = m.id
             WHERE 1=1
         """
         params: List[Any] = []
@@ -1146,13 +1197,38 @@ class DatabaseManager:
         if overdue_only:
             query += " AND t.due_date < CURRENT_DATE AND t.status NOT IN ('done', 'archived')"
 
-        query += " ORDER BY t.priority ASC NULLS LAST, t.due_date ASC NULLS LAST, t.created_at DESC"
+        query += " ORDER BY t.sort_order ASC, t.priority ASC NULLS LAST, t.due_date ASC NULLS LAST, t.created_at DESC"
         query += " LIMIT %s"
         params.append(limit)
 
         with self.get_cursor() as cursor:
             cursor.execute(query, params)
             return cursor.fetchall()
+
+    def update_todo_sort_order(self, ordered_ids: list) -> int:
+        """Set sort_order based on position in the list. Returns count updated."""
+        updated = 0
+        with self.get_cursor() as cursor:
+            for i, todo_id in enumerate(ordered_ids):
+                cursor.execute(
+                    "UPDATE client_todos SET sort_order = %s WHERE id = %s",
+                    (i, todo_id),
+                )
+                updated += cursor.rowcount
+        return updated
+
+    def get_todo(self, todo_id: int) -> Optional[Dict]:
+        """Get a single todo by ID with client name and meeting info."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT t.*, c.name as client_name,
+                       m.title as meeting_title, m.meeting_date as meeting_date_ref
+                FROM client_todos t
+                JOIN clients c ON t.client_id = c.id
+                LEFT JOIN meetings m ON t.meeting_id = m.id
+                WHERE t.id = %s
+            """, (todo_id,))
+            return cursor.fetchone()
 
     def update_todo(
         self,
@@ -1663,6 +1739,39 @@ class DatabaseManager:
                 WHERE phase_id = %s
             """, (phase_id,))
             return cursor.fetchall()
+
+    # Dismissed alerts methods
+
+    def dismiss_alert(self, alert_type: str, reference_id: int, recheck_after=None) -> int:
+        """Dismiss an alert so it won't reappear (until recheck_after if set)."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO dismissed_alerts (alert_type, reference_id, recheck_after)
+                VALUES (%s, %s, %s)
+                ON CONFLICT DO NOTHING
+                RETURNING id
+            """, (alert_type, reference_id, recheck_after))
+            result = cursor.fetchone()
+            return result["id"] if result else 0
+
+    def get_dismissed_alert_ids(self, alert_type: str) -> set:
+        """Get set of reference_ids currently dismissed for a given alert type."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT reference_id FROM dismissed_alerts
+                WHERE alert_type = %s
+                  AND (recheck_after IS NULL OR recheck_after > NOW())
+            """, (alert_type,))
+            return {row["reference_id"] for row in cursor.fetchall()}
+
+    def undismiss_alert(self, alert_type: str, reference_id: int) -> bool:
+        """Remove a dismissal."""
+        with self.get_cursor() as cursor:
+            cursor.execute("""
+                DELETE FROM dismissed_alerts
+                WHERE alert_type = %s AND reference_id = %s
+            """, (alert_type, reference_id))
+            return cursor.rowcount > 0
 
 
 def get_database_manager() -> Optional[DatabaseManager]:

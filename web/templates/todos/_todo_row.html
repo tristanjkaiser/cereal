@@ -1,0 +1,78 @@
+{% set is_done = todo.status in ('done', 'archived') %}
+{% set due_date = todo.due_date %}
+{% set overdue = due_date is not none and due_date < today and not is_done %}
+<tr id="todo-{{ todo.id }}" class="{{ 'overdue-row' if overdue else '' }}{{ ' done' if is_done else '' }}">
+  <td class="td-check">
+    <input type="checkbox" name="todo_ids" value="{{ todo.id }}" class="td-select" form="bulk-form">
+  </td>
+  <td class="status">
+    <button class="td-status-btn"
+            hx-post="{{ url_for('todos.complete', todo_id=todo.id) }}"
+            hx-target="#todo-{{ todo.id }}"
+            hx-swap="outerHTML">
+      {% if todo.status == 'pending' %}&#9744;
+      {% elif todo.status == 'in_progress' %}&#9684;
+      {% elif todo.status == 'done' %}&#10003;
+      {% else %}&mdash;{% endif %}
+    </button>
+  </td>
+  <td class="title td-editable"
+      hx-get="{{ url_for('todos.row', todo_id=todo.id) }}"
+      hx-trigger="cancel"
+      hx-target="#todo-{{ todo.id }}"
+      hx-swap="outerHTML">
+    <span class="td-title-display"
+          onclick="this.closest('td').querySelector('.td-title-edit').style.display='flex';this.style.display='none'">
+      {{ todo.title | linkify_linear | safe }}
+    </span>
+    <form class="td-title-edit" style="display:none"
+          hx-post="{{ url_for('todos.update', todo_id=todo.id) }}"
+          hx-target="#todo-{{ todo.id }}"
+          hx-swap="outerHTML">
+      <input type="text" name="title" value="{{ todo.title }}" class="td-inline-input"
+             onfocus="this.select()"
+             onkeydown="if(event.key==='Escape'){this.closest('form').style.display='none';this.closest('td').querySelector('.td-title-display').style.display=''}">
+      <button type="submit" class="td-inline-save">&#10003;</button>
+    </form>
+  </td>
+  <td>
+    <form hx-post="{{ url_for('todos.update', todo_id=todo.id) }}"
+          hx-target="#todo-{{ todo.id }}"
+          hx-swap="outerHTML"
+          hx-trigger="change">
+      <select name="priority" class="td-inline-select td-pri-select">
+        <option value="0" {{ 'selected' if not todo.priority or todo.priority == 0 }}>—</option>
+        <option value="1" {{ 'selected' if todo.priority == 1 }}>Urgent</option>
+        <option value="2" {{ 'selected' if todo.priority == 2 }}>High</option>
+        <option value="3" {{ 'selected' if todo.priority == 3 }}>Normal</option>
+        <option value="4" {{ 'selected' if todo.priority == 4 }}>Low</option>
+      </select>
+    </form>
+  </td>
+  <td>
+    <form hx-post="{{ url_for('todos.update', todo_id=todo.id) }}"
+          hx-target="#todo-{{ todo.id }}"
+          hx-swap="outerHTML"
+          hx-trigger="change">
+      <input type="text" name="category" value="{{ todo.category or '' }}" placeholder="category"
+             class="td-inline-input td-cat-input"
+             onkeydown="if(event.key==='Enter'){event.preventDefault();this.closest('form').requestSubmit()}">
+    </form>
+  </td>
+  <td class="due">
+    <form hx-post="{{ url_for('todos.update', todo_id=todo.id) }}"
+          hx-target="#todo-{{ todo.id }}"
+          hx-swap="outerHTML"
+          hx-trigger="change">
+      <input type="date" name="due_date" value="{{ due_date.isoformat() if due_date else '' }}"
+             class="td-inline-input td-date-input {{ 'overdue' if overdue else '' }}">
+    </form>
+  </td>
+  <td class="source">
+    {% if todo.meeting_title %}
+      <span class="td-meeting-link" title="{{ todo.meeting_title }}">from {{ todo.meeting_title[:25] }}{% if todo.meeting_title|length > 25 %}..{% endif %}{% if todo.meeting_date_ref %} ({{ todo.meeting_date_ref.strftime('%b %-d') }}){% endif %}</span>
+    {% elif todo.source_context %}
+      {{ todo.source_context[:25] }}{{ '..' if todo.source_context|length > 25 else '' }}
+    {% endif %}
+  </td>
+</tr>

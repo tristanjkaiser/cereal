@@ -14,12 +14,10 @@ Usage:
 import argparse
 import logging
 import os
-import re
 import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Optional
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -30,6 +28,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 from src.database import DatabaseManager
 from src.granola_client import GranolaClient
+from src.services.client_detection import detect_client_from_meeting
 
 # Config
 SETTLE_HOURS = float(os.getenv("AUTO_ARCHIVE_SETTLE_HOURS", "2"))
@@ -50,50 +49,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("auto_archive")
 
-
-# Client detection logic (duplicated from mcp_server/server.py to avoid FastMCP import)
-def detect_client_from_meeting(
-    title: str,
-    attendees: List[dict],
-    known_clients: List[str],
-    aliases: Optional[dict] = None
-) -> Optional[str]:
-    """Detect client from meeting title and attendee data."""
-    if not title:
-        return None
-    title_lower = title.lower()
-
-    if aliases:
-        for alias, canonical in aliases.items():
-            if alias in title_lower:
-                return canonical
-
-    for client in known_clients:
-        if client.lower() in title_lower:
-            return client
-
-    patterns = [
-        r'^([A-Za-z0-9]+)\s+x\s+Goji',
-        r'^([A-Za-z0-9]+):',
-        r'^Record\s+([A-Za-z0-9]+)',
-    ]
-    for pattern in patterns:
-        match = re.match(pattern, title, re.IGNORECASE)
-        if match:
-            return match.group(1)
-
-    external_companies = set()
-    for att in attendees:
-        email = att.get('email', '')
-        if email and not email.endswith(f'@{INTERNAL_DOMAIN}'):
-            company = att.get('company')
-            if company and company.lower() not in ['unknown', 'goji labs', 'gojilabs']:
-                external_companies.add(company)
-
-    if len(external_companies) == 1:
-        return external_companies.pop()
-
-    return None
 
 
 def in_archive_window(doc: dict, settle_hours: float, freshness_hours: float) -> bool:
@@ -196,7 +151,8 @@ def auto_archive(dry_run: bool = False, limit: int = 50,
                 title=title,
                 attendees=attendees,
                 known_clients=known_clients,
-                aliases=aliases
+                aliases=aliases,
+                internal_domain=INTERNAL_DOMAIN
             )
 
             client_id = None

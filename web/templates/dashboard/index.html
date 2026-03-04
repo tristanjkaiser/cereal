@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+
+{% block title %}Cereal &mdash; Clients{% endblock %}
+
+{% block head_extra %}
+<meta http-equiv="refresh" content="30">
+{% endblock %}
+
+{% block content %}
+<div class="header">
+  <h1>Clients</h1>
+  <span class="timestamp">Last refreshed: {{ generated_at }}</span>
+</div>
+
+{% if active %}
+<div class="dash-section">
+  <table class="dash-table">
+    <thead>
+      <tr>
+        <th style="width:2.5rem"></th>
+        <th>Client</th>
+        <th>Current Phase</th>
+        <th>Last Meeting</th>
+        <th>To-Dos</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for c in active %}
+      <tr class="{{ 'dash-row-risk' if c.health == 'at_risk' else '' }}">
+        <td class="dash-dot">
+          {% if c.health == 'at_risk' %}
+            <span class="dash-dot-red" title="At risk"></span>
+          {% elif c.health == 'on_track' %}
+            <span class="dash-dot-green" title="On track"></span>
+          {% else %}
+            <span class="dash-dot-gray" title="No timeline"></span>
+          {% endif %}
+        </td>
+        <td class="dash-client-name">
+          <a href="{{ url_for('clients.detail', client_name=c.name) }}">{{ c.name }}</a>
+          <span class="dash-meeting-count">{{ c.meeting_count }} meeting{{ 's' if c.meeting_count != 1 else '' }}</span>
+        </td>
+        <td>
+          {% if c.phase_label %}{{ c.phase_label }}{% else %}&mdash;{% endif %}
+        </td>
+        <td>
+          {% if c.last_meeting_date %}
+            {{ c.last_meeting_date.strftime('%b %-d') }}
+            <span class="dash-days-ago">{{ c.days_since_meeting }}d ago</span>
+          {% else %}
+            &mdash;
+          {% endif %}
+        </td>
+        <td>
+          {% if c.overdue_todos > 0 %}
+            <span class="dash-overdue-count">{{ c.overdue_todos }} overdue</span>
+          {% endif %}
+          {% if c.open_todos > 0 %}
+            <span class="dash-open-count">{{ c.open_todos }} open</span>
+          {% endif %}
+          {% if c.open_todos == 0 and c.overdue_todos == 0 %}&mdash;{% endif %}
+        </td>
+        <td class="dash-actions">
+          <a href="{{ url_for('clients.detail', client_name=c.name) }}">Detail</a>
+          <a href="{{ url_for('todos.index', client=c.name) }}">To-dos</a>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if inactive %}
+<div class="dash-section dash-inactive">
+  <h2 class="dash-section-title">Not Yet Active</h2>
+  <table class="dash-table">
+    <thead>
+      <tr>
+        <th style="width:2.5rem"></th>
+        <th>Client</th>
+        <th>Current Phase</th>
+        <th>Last Meeting</th>
+        <th>To-Dos</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for c in inactive %}
+      <tr>
+        <td class="dash-dot"><span class="dash-dot-gray" title="No activity"></span></td>
+        <td class="dash-client-name">
+          <a href="{{ url_for('clients.detail', client_name=c.name) }}">{{ c.name }}</a>
+          <span class="dash-meeting-count">0 meetings</span>
+        </td>
+        <td>&mdash;</td>
+        <td>&mdash;</td>
+        <td>
+          {% if c.overdue_todos > 0 %}
+            <span class="dash-overdue-count">{{ c.overdue_todos }} overdue</span>
+          {% endif %}
+          {% if c.open_todos > 0 %}
+            <span class="dash-open-count">{{ c.open_todos }} open</span>
+          {% endif %}
+          {% if c.open_todos == 0 and c.overdue_todos == 0 %}&mdash;{% endif %}
+        </td>
+        <td class="dash-actions">
+          <a href="{{ url_for('clients.detail', client_name=c.name) }}">Detail</a>
+          <a href="{{ url_for('todos.index', client=c.name) }}">To-dos</a>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if not active and not inactive %}
+<div class="client-card">
+  <p class="empty">No clients yet. Archive some meetings to get started.</p>
+</div>
+{% endif %}
+{% endblock %}

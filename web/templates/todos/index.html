@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+
+{% block title %}Cereal &mdash; To-Dos{% endblock %}
+
+{% block head_extra %}
+<meta http-equiv="refresh" content="30">
+<script src="https://unpkg.com/htmx.org@2.0.4" integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="header">
+  <h1>To-Dos</h1>
+  <span class="timestamp">{{ generated_at }}</span>
+</div>
+
+{# ── View tabs ── #}
+<div class="filters">
+  <div class="client-filters">
+    {# View mode pills #}
+    <a href="{{ url_for('todos.index', client=client_filter or '', done=1 if show_done else '') }}"
+       class="{{ 'active' if view == 'all' else '' }}">All Open</a>
+    <a href="{{ url_for('todos.index', view='my_day', client=client_filter or '') }}"
+       class="{{ 'active' if view == 'my_day' else '' }}">My Day</a>
+    <a href="{{ url_for('todos.index', view='by_category', client=client_filter or '', done=1 if show_done else '') }}"
+       class="{{ 'active' if view == 'by_category' else '' }}">By Category</a>
+    <span class="td-filter-sep">|</span>
+    {# Client pills #}
+    <a href="{{ url_for('todos.index', view=view, done=1 if show_done else '') }}"
+       class="{{ 'active' if not client_filter else '' }}">All Clients</a>
+    {% for c in all_clients %}
+    <a href="{{ url_for('todos.index', view=view, client=c.name, done=1 if show_done else '') }}"
+       class="{{ 'active' if c.name == client_filter else '' }}">{{ c.name }}</a>
+    {% endfor %}
+  </div>
+  {% if view != 'my_day' %}
+    {% if show_done %}
+    <a href="{{ url_for('todos.index', view=view, client=client_filter) if client_filter else url_for('todos.index', view=view) }}" class="toggle">Hide done</a>
+    {% else %}
+    <a href="{{ url_for('todos.index', view=view, client=client_filter, done=1) if client_filter else url_for('todos.index', view=view, done=1) }}" class="toggle">Show done</a>
+    {% endif %}
+  {% endif %}
+</div>
+
+{# ── Bulk action bar ── #}
+<div class="td-bulk-bar" id="bulk-bar" style="display:none">
+  <form id="bulk-form" hx-post="{{ url_for('todos.bulk') }}" hx-swap="none"
+        hx-on::after-request="window.location.reload()">
+    <span class="td-bulk-label"><span id="bulk-count">0</span> selected</span>
+    <button type="submit" name="action" value="complete" class="td-bulk-btn">Complete</button>
+    <button type="submit" name="action" value="priority_1" class="td-bulk-btn td-bulk-urgent">Urgent</button>
+    <button type="submit" name="action" value="priority_2" class="td-bulk-btn td-bulk-high">High</button>
+    <button type="submit" name="action" value="priority_3" class="td-bulk-btn">Normal</button>
+    <button type="submit" name="action" value="delete" class="td-bulk-btn td-bulk-danger"
+            onclick="return confirm('Delete selected todos?')">Delete</button>
+  </form>
+</div>
+
+{% if by_group %}
+{% for group_name, todos in by_group.items() %}
+{% set open_count = todos | selectattr('status', 'ne', 'done') | selectattr('status', 'ne', 'archived') | list | length %}
+<div class="client-card">
+  <h2>{{ group_name }} <span class="count">{{ open_count }} open</span></h2>
+
+  {# ── Quick-add ── #}
+  {% if group_label == 'client' %}
+  <form class="td-quick-add"
+        hx-post="{{ url_for('todos.create') }}"
+        hx-target="#tbody-{{ loop.index }}"
+        hx-swap="afterbegin"
+        hx-on::after-request="if(event.detail.successful) this.reset()">
+    <input type="hidden" name="client_name" value="{{ group_name }}">
+    <input type="text" name="title" placeholder="Add a todo..." class="td-quick-input" autocomplete="off">
+  </form>
+  {% endif %}
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width:2rem"></th>
+        <th style="width:2.5rem">Status</th>
+        <th>Title</th>
+        <th style="width:5.5rem">Priority</th>
+        <th style="width:6rem">Category</th>
+        <th style="width:7rem">Due</th>
+        <th>Source</th>
+      </tr>
+    </thead>
+    <tbody id="tbody-{{ loop.index }}" class="td-sortable" data-client="{{ group_name }}">
+    {% for todo in todos %}
+      {% include "todos/_todo_row.html" %}
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endfor %}
+{% else %}
+<div class="client-card">
+  <p class="empty">
+    {% if view == 'my_day' %}Nothing due today. Nice work!
+    {% else %}No to-dos found{% if client_filter %} for {{ client_filter }}{% endif %}.
+    {% endif %}
+  </p>
+</div>
+{% endif %}
+
+<script>
+// Bulk selection
+document.addEventListener('change', function(e) {
+  if (e.target.classList.contains('td-select')) {
+    var checked = document.querySelectorAll('.td-select:checked');
+    var bar = document.getElementById('bulk-bar');
+    var count = document.getElementById('bulk-count');
+    if (checked.length > 0) {
+      bar.style.display = '';
+      count.textContent = checked.length;
+    } else {
+      bar.style.display = 'none';
+    }
+  }
+});
+
+// SortableJS for each tbody
+document.querySelectorAll('.td-sortable').forEach(function(tbody) {
+  new Sortable(tbody, {
+    animation: 150,
+    ghostClass: 'td-drag-ghost',
+    handle: '.td-check',
+    onEnd: function() {
+      var ids = [];
+      tbody.querySelectorAll('tr[id]').forEach(function(tr) {
+        ids.push(tr.id.replace('todo-', ''));
+      });
+      fetch('{{ url_for("todos.reorder") }}', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ids: ids})
+      });
+    }
+  });
+});
+</script>
+{% endblock %}

@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+
+{% block title %}Cereal &mdash; {{ client.name }}{% endblock %}
+
+{% block head_extra %}
+<meta http-equiv="refresh" content="30">
+{% endblock %}
+
+{% block content %}
+{# ── Header ── #}
+<div class="cli-header">
+  <div>
+    <h1>{{ client.name }}</h1>
+    {% if aliases %}
+    <div class="cli-aliases">
+      {% for a in aliases %}<span class="cli-alias-pill">{{ a }}</span>{% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  <div>
+    <span class="timestamp">{{ generated_at }}</span>
+    {% for i in integrations %}
+      {% if i.integration_type == 'linear_team' %}
+        <span class="cli-integration">Linear: {{ i.external_name }}{% if i.metadata and i.metadata.team_key %} ({{ i.metadata.team_key }}){% endif %}</span>
+      {% elif i.integration_type == 'slack' %}
+        <span class="cli-integration">Slack: {{ i.external_name }}</span>
+      {% else %}
+        <span class="cli-integration">{{ i.integration_type }}: {{ i.external_name }}</span>
+      {% endif %}
+    {% endfor %}
+  </div>
+</div>
+
+{# ── Timeline ── #}
+{% if timelines %}
+{% for tl_info in timelines %}
+<div class="cli-section">
+  <h2 class="cli-section-title">
+    {{ tl_info.timeline.project_name or 'Timeline' }}
+    <span class="cli-status-badge cli-status-{{ tl_info.timeline.status or 'active' }}">{{ tl_info.timeline.status or 'active' }}</span>
+  </h2>
+  {% if tl_info.phases %}
+  <div class="cli-phase-list">
+    {% for p in tl_info.phases %}
+      {% if not p.parent_phase_id %}
+      <div class="cli-phase-item {{ 'cli-phase-active' if p.status == 'in_progress' else '' }}">
+        <span class="cli-phase-dot cli-phase-dot-{{ p.status or 'upcoming' }}"></span>
+        <span class="cli-phase-name">{{ p.name }}</span>
+        {% if p.status and p.status != 'upcoming' %}
+          <span class="cli-phase-status">{{ p.status }}</span>
+        {% endif %}
+      </div>
+      {# Subphases #}
+      {% for sp in tl_info.phases %}
+        {% if sp.parent_phase_id == p.id %}
+        <div class="cli-subphase {{ 'cli-phase-active' if sp.status == 'in_progress' else '' }}">
+          <span class="cli-phase-dot cli-phase-dot-{{ sp.status or 'upcoming' }}"></span>
+          <span class="cli-phase-name">{{ sp.name }}</span>
+        </div>
+        {% endif %}
+      {% endfor %}
+      {% endif %}
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="empty">No phases defined yet.</p>
+  {% endif %}
+</div>
+{% endfor %}
+{% endif %}
+
+{# ── To-Dos ── #}
+<div class="cli-section">
+  <h2 class="cli-section-title">
+    To-Dos
+    <span class="count">{{ open_todos }} open{% if overdue_todos %}, <span class="overdue">{{ overdue_todos }} overdue</span>{% endif %}</span>
+    <a href="{{ url_for('todos.index', client=client.name) }}" class="cli-view-all">View all</a>
+  </h2>
+  {% if todos %}
+  <table>
+    <thead>
+      <tr><th>Status</th><th>Title</th><th>Priority</th><th>Category</th><th>Due</th></tr>
+    </thead>
+    <tbody>
+    {% for todo in todos %}
+      {% set is_done = todo.status in ('done', 'archived') %}
+      {% set due_date = todo.due_date %}
+      {% set overdue = due_date is not none and due_date < today and not is_done %}
+      <tr class="{{ 'overdue-row' if overdue else '' }}{{ ' done' if is_done else '' }}">
+        <td class="status">
+          {% if todo.status == 'pending' %}&#9744;
+          {% elif todo.status == 'in_progress' %}&#9684;
+          {% elif todo.status == 'done' %}&#10003;
+          {% else %}&mdash;{% endif %}
+        </td>
+        <td class="title">{{ todo.title | linkify_linear | safe }}</td>
+        <td>
+          {% if todo.priority == 1 %}<span class="badge" style="background:var(--pri-urgent)">Urgent</span>
+          {% elif todo.priority == 2 %}<span class="badge" style="background:var(--pri-high)">High</span>
+          {% elif todo.priority == 3 %}<span class="badge" style="background:var(--pri-normal)">Normal</span>
+          {% elif todo.priority == 4 %}<span class="badge" style="background:var(--pri-low)">Low</span>
+          {% endif %}
+        </td>
+        <td>{% if todo.category %}<span class="cat">{{ todo.category }}</span>{% endif %}</td>
+        <td class="due">
+          {% if due_date %}
+            {% if overdue %}<span class="overdue">&#9888;&#65039; {{ due_date.strftime('%b %-d') }}</span>
+            {% else %}{{ due_date.strftime('%b %-d') }}{% endif %}
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No open to-dos.</p>
+  {% endif %}
+</div>
+
+{# ── Context Docs ── #}
+<div class="cli-section">
+  <h2 class="cli-section-title">Context Docs <span class="count">{{ context_docs | length }}</span></h2>
+  {% if context_docs %}
+  <table>
+    <thead>
+      <tr><th>Type</th><th>Title</th><th>Source</th><th>Updated</th></tr>
+    </thead>
+    <tbody>
+    {% for doc in context_docs %}
+      <tr>
+        <td><span class="cli-ctx-type cli-ctx-{{ doc.context_type }}">{{ doc.context_type }}</span></td>
+        <td class="title">{{ doc.title }}</td>
+        <td>{% if doc.source_url %}<a href="{{ doc.source_url }}" target="_blank" class="source">link</a>{% endif %}</td>
+        <td class="due">{{ doc.updated_at.strftime('%b %-d') if doc.updated_at else '' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No context docs yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

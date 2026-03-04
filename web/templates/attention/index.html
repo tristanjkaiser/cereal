@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+
+{% block title %}Cereal &mdash; Attention{% endblock %}
+
+{% block head_extra %}
+<meta http-equiv="refresh" content="30">
+{% endblock %}
+
+{% block content %}
+<div class="header">
+  <h1>Attention</h1>
+  <span class="timestamp">{{ generated_at }}</span>
+</div>
+
+{% if alerts %}
+<div class="att-list">
+  {% for a in alerts %}
+  <div class="att-item att-{{ a.urgency_label }}">
+    <span class="att-icon">{{ a.icon }}</span>
+    <span class="att-type-badge att-badge-{{ a.urgency_label }}">{{ a.type | replace('_', ' ') }}</span>
+    <span class="att-desc">{{ a.description }}</span>
+    {% if a.client_name %}
+      <a href="{{ url_for('clients.detail', client_name=a.client_name) }}" class="att-client">{{ a.client_name }}</a>
+    {% endif %}
+    <span class="att-spacer"></span>
+    {% if a.client_name and a.type == 'overdue_todo' %}
+      <a href="{{ url_for('todos.index', client=a.client_name) }}" class="att-action">{{ a.action_label }}</a>
+    {% elif a.client_name %}
+      <a href="{{ url_for('clients.detail', client_name=a.client_name) }}" class="att-action">{{ a.action_label }}</a>
+    {% endif %}
+    <form method="post" action="{{ url_for('attention.dismiss') }}" class="att-dismiss-form">
+      <input type="hidden" name="alert_type" value="{{ a.type }}">
+      <input type="hidden" name="reference_id" value="{{ a.reference_id }}">
+      <button type="submit" class="att-dismiss" title="Dismiss">&times;</button>
+    </form>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="client-card">
+  <p class="empty">Nothing needs your attention right now.</p>
+</div>
+{% endif %}
+{% endblock %}

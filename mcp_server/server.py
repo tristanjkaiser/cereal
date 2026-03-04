@@ -17,6 +17,7 @@ import logging
 import os
 import re
 import sys
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
@@ -49,6 +50,8 @@ try:
 
     from src.database import DatabaseManager
     from src.granola_client import GranolaClient
+    from src.services.client_detection import detect_client_from_meeting
+    from src.services.todo_service import TodoService
     logger.info("Successfully imported DatabaseManager and GranolaClient")
 
 except Exception as e:
@@ -77,74 +80,6 @@ def get_db() -> DatabaseManager:
         logger.info("Database connected successfully")
     return _db
 
-
-# Internal domain for detecting external attendees
-INTERNAL_DOMAIN = os.getenv("INTERNAL_DOMAIN", "gojilabs.com")
-
-
-def detect_client_from_meeting(
-    title: str,
-    attendees: List[dict],
-    known_clients: List[str],
-    aliases: Optional[dict] = None
-) -> Optional[str]:
-    """
-    Detect client from meeting title and attendee data.
-
-    Detection priority:
-    0. Alias match (highest priority - user-defined mappings)
-    1. Known client name appears in title
-    2. Title patterns like "Client x Goji", "Client:", "Record Client"
-    3. External attendee company name (if only one external company)
-
-    Args:
-        title: Meeting title
-        attendees: List of attendee dicts with 'email' and 'company' keys
-        known_clients: List of known client names from database
-        aliases: Dict mapping alias (lowercase) → canonical client name
-
-    Returns:
-        Client name if detected, None otherwise
-    """
-    if not title:
-        return None
-    title_lower = title.lower()
-
-    # 0. Check aliases FIRST (highest priority - user-defined mappings)
-    if aliases:
-        for alias, canonical in aliases.items():
-            if alias in title_lower:
-                return canonical
-
-    # 1. Known client match (case-insensitive)
-    for client in known_clients:
-        if client.lower() in title_lower:
-            return client
-
-    # 2. Title pattern extraction
-    patterns = [
-        r'^([A-Za-z0-9]+)\s+x\s+Goji',       # "NGynS x Goji"
-        r'^([A-Za-z0-9]+):',                  # "GS1: ..."
-        r'^Record\s+([A-Za-z0-9]+)',          # "Record NB44 ..."
-    ]
-    for pattern in patterns:
-        match = re.match(pattern, title, re.IGNORECASE)
-        if match:
-            return match.group(1)
-
-    # 3. External attendee detection
-    external_companies = set()
-    for att in attendees:
-        email = att.get('email', '')
-        if email and not email.endswith(f'@{INTERNAL_DOMAIN}'):
-            company = att.get('company')
-            if company and company.lower() not in ['unknown', 'goji labs', 'gojilabs']:
-                external_companies.add(company)
-
-    if len(external_companies) == 1:
-        return external_companies.pop()
-
-    return None
 
 
 def format_meeting_summary(meeting: dict) -> str:
@@ -1106,10 +1041,10 @@ def list_overdue_todos(client_name: str = None, limit: int = 50) -> str:
 
 @mcp.tool()
 def view_todos(client_name: str = None, include_done: bool = False) -> str:
-    """Generate an HTML snapshot of to-dos and open it in the browser.
+    """Open the to-do dashboard in the browser.
 
-    Creates a visual dashboard grouped by client with color-coded priorities,
-    category pills, and overdue highlighting. Read-only snapshot — not interactive.
+    If the persistent dashboard is running (localhost:5555), opens that.
+    Otherwise falls back to generating a static HTML snapshot.
 
     Args:
         client_name: Optional - filter to a specific client
@@ -1119,6 +1054,27 @@ def view_todos(client_name: str = None, include_done: bool = False) -> str:
         Confirmation message with item count.
     """
     import webbrowser
+    import urllib.request
+
+    # Try the persistent dashboard first
+    dashboard_port = os.getenv("DASHBOARD_PORT", "5555")
+    dashboard_url = f"http://localhost:{dashboard_port}/todos/"
+    qs_parts = []
+    if client_name:
+        qs_parts.append(f"client={urllib.parse.quote(client_name)}")
+    if include_done:
+        qs_parts.append("done=1")
+    if qs_parts:
+        dashboard_url += "?" + "&".join(qs_parts)
+
+    try:
+        urllib.request.urlopen(f"http://localhost:{dashboard_port}/", timeout=1)
+        webbrowser.open(dashboard_url)
+        return f"Opened live dashboard at {dashboard_url}"
+    except Exception:
+        pass
+
+    # Fallback: static HTML snapshot
     db = get_db()
 
     client_id = None
@@ -1160,7 +1116,7 @@ def view_todos(client_name: str = None, include_done: bool = False) -> str:
 
     total = len(todos)
     client_count = len(by_client)
-    return f"Opened dashboard in browser with {total} items across {client_count} client{'s' if client_count != 1 else ''}."
+    return f"Opened static snapshot in browser with {total} items across {client_count} client{'s' if client_count != 1 else ''}."
 
 
 def _build_todos_html(by_client: dict, today, generated_at: str) -> str:
@@ -1217,7 +1173,7 @@ def _build_todos_html(by_client: dict, today, generated_at: str) -> str:
             rows += f"""<tr class="{row_class}{done_class}">
   <td class="status">{icon}</td>
   <td class="id">{todo['id']}</td>
-  <td class="title">{_html_escape(todo['title'])}</td>
+  <td class="title">{_linkify_linear(todo['title'])}</td>
   <td>{pri_html}</td>
   <td>{cat_html}</td>
   <td class="due">{due_html}</td>
@@ -1255,6 +1211,8 @@ def _build_todos_html(by_client: dict, today, generated_at: str) -> str:
   .status {{ font-size: 1.1rem; text-align: center; width: 3rem; }}
   .id {{ color: #9ca3af; font-size: 0.8rem; width: 2.5rem; }}
   .title {{ font-weight: 500; }}
+  .title a {{ color: #4338ca; text-decoration: none; border-bottom: 1px solid #c7d2fe; }}
+  .title a:hover {{ border-bottom-color: #4338ca; }}
   .due {{ white-space: nowrap; }}
   .source {{ color: #9ca3af; font-size: 0.8rem; }}
   .badge {{ display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px; color: #fff; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }}
@@ -1280,13 +1238,20 @@ def _html_escape(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
+_LINEAR_KEY_RE = re.compile(r'\b([A-Z][A-Z0-9]+-\d+)\b')
+
+
+def _linkify_linear(text: str) -> str:
+    """HTML-escape text, then wrap Linear issue keys as clickable links."""
+    escaped = _html_escape(text)
+    return _LINEAR_KEY_RE.sub(
+        r'<a href="https://linear.app/issue/\1" target="_blank">\1</a>',
+        escaped
+    )
+
+
 def _match_todos(todos: list, search: str) -> list:
-    """Match todos by title substring. Exact match takes priority over partial."""
-    search_lower = search.lower()
-    exact = [t for t in todos if t['title'].lower() == search_lower]
-    if exact:
-        return exact
-    return [t for t in todos if search_lower in t['title'].lower()]
+    return TodoService.match_todos(todos, search)
 
 
 @mcp.tool()

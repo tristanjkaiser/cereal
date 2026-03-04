@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+
+{% block title %}Cereal &mdash; {{ timeline.project_name or 'Timeline' }}{% endblock %}
+
+{% block head_extra %}
+<meta http-equiv="refresh" content="30">
+{% endblock %}
+
+{% block content %}
+{# ── Header ── #}
+<div class="cli-header">
+  <div>
+    <h1>{{ timeline.project_name or 'Timeline' }}</h1>
+    <div style="margin-top:0.2rem">
+      <a href="{{ url_for('clients.detail', client_name=timeline.client_name) }}" class="gt-client-link">{{ timeline.client_name }}</a>
+      <span class="cli-status-badge cli-status-{{ timeline.status or 'active' }}">{{ timeline.status or 'active' }}</span>
+      {% if timeline.sow_signed_date %}
+        <span class="gt-meta">SOW signed {{ timeline.sow_signed_date.strftime('%b %-d, %Y') if timeline.sow_signed_date.strftime is defined else timeline.sow_signed_date }}</span>
+      {% endif %}
+      {% if timeline.estimated_overall_weeks_low %}
+        <span class="gt-meta">Est. {{ timeline.estimated_overall_weeks_low|int }}&ndash;{{ timeline.estimated_overall_weeks_high|int }}wk</span>
+      {% endif %}
+    </div>
+  </div>
+  <span class="timestamp">{{ generated_at }}</span>
+</div>
+
+{# ── Full Gantt ── #}
+<div class="client-card">
+  <h2>Timeline <span class="count">{{ phase_tree | length }} phases</span></h2>
+  <div class="gt-chart gt-chart-detail">
+    {# Month header #}
+    <div class="gt-months">
+      {% for m in gantt.months %}
+      <span class="gt-month" style="left:{{ m.pct }}%">{{ m.label }}</span>
+      {% endfor %}
+    </div>
+
+    {# Phase bars with subphases #}
+    {% for pt in phase_tree %}
+    {% set bar = gantt.bar_map.get(pt.phase.id) %}
+    <div class="gt-row">
+      <div class="gt-row-label">
+        <span class="cli-phase-dot cli-phase-dot-{{ pt.phase.status or 'upcoming' }}"></span>
+        {{ pt.phase.name }}
+      </div>
+      <div class="gt-row-track">
+        <div class="gt-today" style="left:{{ gantt.today_pct }}%"></div>
+        {% if bar and bar.visible %}
+        <div class="gt-bar gt-bar-{{ bar.status }}"
+             style="left:{{ bar.left }}%; width:{{ bar.width }}%">
+        </div>
+        {% endif %}
+        {# Milestone markers #}
+        {% for ms in pt.milestones %}
+          {% if ms.target_date %}
+            {% set ms_days = (ms.target_date - gantt.range_start).days %}
+            {% set ms_pct = (ms_days / gantt.total_days * 100) %}
+            {% if ms_pct >= 0 and ms_pct <= 100 %}
+            <div class="gt-milestone gt-milestone-{{ ms.status or 'pending' }}"
+                 style="left:{{ ms_pct }}%"
+                 title="{{ ms.name }}{% if ms.target_date %} ({{ ms.target_date.strftime('%b %-d') if ms.target_date.strftime is defined else ms.target_date }}){% endif %}">
+              <span class="gt-ms-icon">{% if ms.status == 'completed' %}&#10003;{% else %}&#9670;{% endif %}</span>
+            </div>
+            {% endif %}
+          {% endif %}
+        {% endfor %}
+      </div>
+    </div>
+
+    {# Subphase rows #}
+    {% for sp_gantt in pt.sub_gantt %}
+    <div class="gt-row gt-row-sub">
+      <div class="gt-row-label gt-row-label-sub">
+        <span class="cli-phase-dot cli-phase-dot-{{ sp_gantt.status or 'upcoming' }}"></span>
+        {{ sp_gantt.name }}
+      </div>
+      <div class="gt-row-track">
+        <div class="gt-today" style="left:{{ gantt.today_pct }}%"></div>
+        {% if bar and bar.visible %}
+        {% set sub_left = bar.left + sp_gantt.left / 100 * bar.width %}
+        {% set sub_width = sp_gantt.width / 100 * bar.width %}
+        <div class="gt-bar gt-bar-sub gt-bar-{{ sp_gantt.status }}"
+             style="left:{{ sub_left }}%; width:{{ sub_width }}%">
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+    {% endfor %}
+  </div>
+</div>
+
+{# ── Linear Mappings ── #}
+{% if linear_mappings %}
+<div class="client-card">
+  <h2>Linear Projects <span class="count">{{ linear_mappings | length }}</span></h2>
+  <table>
+    <thead>
+      <tr><th>Project</th><th>Phase</th><th>Milestone</th></tr>
+    </thead>
+    <tbody>
+    {% for lm in linear_mappings %}
+      <tr>
+        <td class="title">
+          {% if lm.linear_project_name %}
+            <a href="https://linear.app" target="_blank">{{ lm.linear_project_name }}</a>
+          {% elif lm.linear_project_id %}
+            {{ lm.linear_project_id }}
+          {% else %}&mdash;{% endif %}
+        </td>
+        <td>{{ lm.phase_name or '&mdash;' | safe }}</td>
+        <td>{{ lm.milestone_name or '&mdash;' | safe }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{# ── Health Snapshots ── #}
+{% if snapshots %}
+<div class="client-card">
+  <h2>Health History <span class="count">{{ snapshots | length }}</span></h2>
+  <div class="gt-snapshots">
+    {% for s in snapshots %}
+    <div class="gt-snapshot">
+      <span class="gt-snap-date">{{ s.snapshot_date.strftime('%b %-d') if s.snapshot_date else '' }}</span>
+      <span class="gt-snap-badge gt-snap-{{ s.health }}">{{ s.health }}</span>
+      <span class="gt-snap-phase">{{ s.current_phase }}</span>
+      <span class="gt-snap-summary">{{ s.summary[:100] }}{{ '…' if s.summary|length > 100 else '' }}</span>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{# ── Workshops ── #}
+{% if workshops %}
+<div class="client-card">
+  <h2>Strategy Sprint Workshops <span class="count">{{ workshops | length }}</span></h2>
+  <table>
+    <thead>
+      <tr><th>#</th><th>Status</th><th>Scheduled</th><th>Completed</th><th>Notes</th></tr>
+    </thead>
+    <tbody>
+    {% for w in workshops %}
+      <tr class="{{ 'done' if w.status == 'completed' else '' }}">
+        <td class="id">{{ w.workshop_number }}</td>
+        <td>
+          {% if w.status == 'completed' %}&#10003;
+          {% elif w.status == 'scheduled' %}&#128197;
+          {% else %}&mdash;{% endif %}
+        </td>
+        <td class="due">{{ w.scheduled_date.strftime('%b %-d') if w.scheduled_date else '&mdash;' | safe }}</td>
+        <td class="due">{{ w.actual_date.strftime('%b %-d') if w.actual_date else '' }}</td>
+        <td class="source">{{ w.notes or '' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{# ── Notes ── #}
+{% if timeline.notes %}
+<div class="client-card">
+  <h2>Notes</h2>
+  <p style="font-size:0.875rem; color:var(--muted); white-space:pre-wrap;">{{ timeline.notes }}</p>
+</div>
+{% endif %}
+{% endblock %}

@@ -11,6 +11,9 @@ cd mcp_server && uv run mcp dev server.py
 # Database access
 psql postgresql://localhost:5432/cereal
 
+# Web dashboard (http://localhost:5555)
+python web/run.py --open
+
 # View MCP server logs
 tail -f logs/mcp_server.log
 ```
@@ -19,12 +22,16 @@ tail -f logs/mcp_server.log
 
 ```
 Granola (local app) → GranolaClient → PostgreSQL ← MCP Server → Claude Desktop
+                                             ↑
+                                        Flask Web App
 ```
 
 - **Granola** runs locally at `http://localhost:14823` and stores meeting transcripts
 - **GranolaClient** (`src/granola_client.py`) fetches documents via Granola's local API
-- **DatabaseManager** (`src/database.py`) handles PostgreSQL operations
+- **DatabaseManager** (`src/database.py`) handles PostgreSQL operations (supports opt-in connection pooling)
+- **Service Layer** (`src/services/`) shared business logic used by MCP, Flask, and auto_archive
 - **MCP Server** (`mcp_server/server.py`) exposes tools to Claude Desktop via FastMCP
+- **Web App** (`web/`) Flask app serving the dashboard at `http://localhost:5555`
 
 ## Key Files
 
@@ -40,6 +47,18 @@ Granola (local app) → GranolaClient → PostgreSQL ← MCP Server → Claude D
 | `scripts/auto_archive.py` | Automated meeting archival script |
 | `scripts/auto_archive_ctl.sh` | launchd enable/disable/status helper |
 | `scripts/todos_migration.sql` | To-do table migration |
+| `src/services/client_detection.py` | Client detection logic (shared) |
+| `src/services/todo_service.py` | Todo grouping/matching helpers |
+| `src/services/client_service.py` | Client lookup helpers |
+| `web/__init__.py` | Flask app factory (`create_app()`) |
+| `web/config.py` | Flask configuration |
+| `web/extensions.py` | DB lifecycle (pooled DatabaseManager) |
+| `web/run.py` | Web app entry point (replaces dashboard/serve.py) |
+| `web/routes/todos.py` | `/todos` blueprint |
+| `web/templates/` | Jinja2 templates (base.html, todos/) |
+| `web/static/css/style.css` | CSS with design tokens |
+| `dashboard/serve.py` | Legacy dashboard (deprecated, kept as fallback) |
+| `dashboard/dashboard_ctl.sh` | launchd enable/disable/status for dashboard |
 
 ## Database Schema
 
@@ -275,7 +294,27 @@ python scripts/auto_archive.py --limit 100         # Fetch more docs
 python scripts/auto_archive.py --settle-hours 1    # Override settle period
 ```
 
-**Note:** `detect_client_from_meeting()` is duplicated from `server.py` into `auto_archive.py` to avoid importing FastMCP. Changes to detection logic need to be updated in both places.
+**Note:** `detect_client_from_meeting()` lives in `src/services/client_detection.py` and is imported by both `server.py` and `auto_archive.py`.
+
+## Web App
+
+Flask web app at `http://localhost:5555`. Serves the to-do dashboard (and future pages). Uses `src/services/` for business logic shared with MCP.
+
+```bash
+python web/run.py --open                    # Start and open browser
+python web/run.py --port 8080               # Custom port
+python web/run.py --debug                   # Debug mode with auto-reload
+./dashboard/dashboard_ctl.sh enable         # Run via launchd (auto-start on login)
+./dashboard/dashboard_ctl.sh status         # Check if running
+./dashboard/dashboard_ctl.sh disable        # Stop launchd service
+```
+
+- Auto-refreshes every 30 seconds
+- Filter by client or show/hide completed items via links
+- `view_todos` MCP tool opens the dashboard URL if running, falls back to static HTML if not
+- Port configurable via `--port` flag or `DASHBOARD_PORT` env var
+- Uses connection pooling (`pool_size=5`) for concurrent requests
+- `dashboard/serve.py` kept as deprecated fallback
 
 ## Development
 
@@ -291,6 +330,10 @@ python scripts/auto_archive.py --settle-hours 1    # Override settle period
 1. Add the method to `DatabaseManager` in `src/database.py`
 2. Use `with self.get_cursor() as cursor:` for queries
 3. Return `Dict` for single rows, `List[Dict]` for multiple
+
+### Service layer
+
+Shared business logic lives in `src/services/`. Services accept a `DatabaseManager` instance and are used by MCP tools, Flask routes, and `auto_archive.py`. If logic is needed in more than one consumer, extract it into a service.
 
 ### Testing the MCP server
 

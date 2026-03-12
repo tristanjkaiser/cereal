@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+
+{% block title %}Cereal &mdash; Logs{% endblock %}
+
+{% block head_extra %}
+<meta http-equiv="refresh" content="30">
+{% endblock %}
+
+{% block content %}
+<div class="header">
+  <h1>Logs</h1>
+  <span class="timestamp">{{ generated_at }}</span>
+</div>
+
+<div class="filters">
+  <div class="client-filters">
+    <a href="{{ url_for('activity.index', period='today') }}"
+       class="{{ 'active' if period == 'today' }}">Today</a>
+    <a href="{{ url_for('activity.index', period='week') }}"
+       class="{{ 'active' if period == 'week' }}">Last 7 days</a>
+    <a href="{{ url_for('activity.index', period='month') }}"
+       class="{{ 'active' if period == 'month' }}">Last 30 days</a>
+  </div>
+</div>
+
+{% if not grouped %}
+<div class="client-card">
+  <p class="empty">No activity logged yet.</p>
+</div>
+{% endif %}
+
+{% for day, entries in grouped.items() %}
+<div class="log-day">
+  <h2 class="log-day-title">{{ day.strftime('%A &mdash; %B %-d, %Y') }}</h2>
+  <div class="log-entries">
+    {% for e in entries %}
+    <div class="log-entry log-{{ e.event_type }}">
+      <span class="log-time">{{ e.created_at.strftime('%-I:%M %p') }}</span>
+      <span class="log-summary">{{ e.summary }}</span>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endfor %}
+{% endblock %}

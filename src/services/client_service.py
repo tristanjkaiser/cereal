@@ -2,6 +2,8 @@
 from datetime import date
 from typing import Optional
 
+INTERNAL_CLIENT_NAME = "Internal"
+
 
 class ClientService:
     def __init__(self, db):
@@ -11,6 +13,10 @@ class ClientService:
         """Look up a client by name. Returns id or None."""
         client = self.db.get_client_by_name(name)
         return client["id"] if client else None
+
+    def ensure_internal_client(self) -> int:
+        """Ensure the 'Internal' virtual client exists. Returns its id."""
+        return self.db.get_or_create_client(INTERNAL_CLIENT_NAME)
 
     def get_all_clients(self) -> list:
         """Return all clients (id + name)."""

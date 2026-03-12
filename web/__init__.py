@@ -44,22 +44,25 @@ def create_app(config=None):
     from web.routes.clients import bp as clients_bp
     from web.routes.attention import bp as attention_bp
     from web.routes.timelines import bp as timelines_bp
+    from web.routes.activity import bp as activity_bp
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(todos_bp)
     app.register_blueprint(clients_bp)
     app.register_blueprint(attention_bp)
     app.register_blueprint(timelines_bp)
+    app.register_blueprint(activity_bp)
 
     # Make alert count and client list available to all templates (for sidebar)
     @app.context_processor
     def inject_nav_globals():
         try:
             from src.services.attention_service import AttentionService
-            from src.services.client_service import ClientService
+            from src.services.client_service import ClientService, INTERNAL_CLIENT_NAME
             from web.extensions import get_db
             db = get_db()
             count = AttentionService(db).get_alert_count()
-            nav_clients = ClientService(db).get_all_clients()
+            nav_clients = [c for c in ClientService(db).get_all_clients()
+                           if c['name'] != INTERNAL_CLIENT_NAME]
         except Exception:
             count = 0
             nav_clients = []

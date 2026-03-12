@@ -5,6 +5,8 @@ Shared between MCP server and Flask web app.
 from collections import OrderedDict
 from datetime import date
 
+from src.services.client_service import INTERNAL_CLIENT_NAME
+
 
 class TodoService:
     def __init__(self, db):
@@ -29,6 +31,12 @@ class TodoService:
             if cname not in by_client:
                 by_client[cname] = []
             by_client[cname].append(todo)
+
+        # Sort Internal to the end
+        if INTERNAL_CLIENT_NAME in by_client:
+            internal_todos = by_client.pop(INTERNAL_CLIENT_NAME)
+            by_client[INTERNAL_CLIENT_NAME] = internal_todos
+
         return by_client
 
     def get_my_day_todos(self, client_id=None, limit=200) -> OrderedDict:
@@ -49,6 +57,12 @@ class TodoService:
             if cname not in by_client:
                 by_client[cname] = []
             by_client[cname].append(todo)
+
+        # Sort Internal to the end
+        if INTERNAL_CLIENT_NAME in by_client:
+            internal_todos = by_client.pop(INTERNAL_CLIENT_NAME)
+            by_client[INTERNAL_CLIENT_NAME] = internal_todos
+
         return by_client
 
     def get_todos_grouped_by_category(

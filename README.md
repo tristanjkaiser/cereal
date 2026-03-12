@@ -14,6 +14,8 @@ i made this to function as a sort of second brain. it's also a work in progress.
 - **Client context** - store PRDs, estimates, and other docs per client
 - **Linear integration** - pair with Linear MCP for project/issue context
 - **Slack integration** - link clients to internal and external Slack channels
+- **To-do tracking** *(experimental)* - track action items per client, with optional AI extraction from transcripts
+- **Web dashboard** - view and filter to-dos at `http://localhost:5555`
 
 ## Prerequisites
 
@@ -148,6 +150,57 @@ Ask Claude: "Archive my recent meetings from Granola"
 | `assess_project_health` | Cross-reference timeline + meetings + Linear for health assessment |
 | `get_project_snapshots` | Historical health assessments for a project |
 
+### To-Do Tools
+
+| Tool | Description |
+|------|-------------|
+| `add_todo` | Create a to-do for a client |
+| `add_todos_batch` | Create multiple to-dos at once |
+| `list_todos` | List items with filtering; no args = open items across all clients |
+| `update_todo` | Update any fields on a to-do |
+| `complete_todo` | Mark a to-do as done |
+| `delete_todo` | Permanently remove a to-do |
+| `list_overdue_todos` | Show overdue items across all clients |
+| `view_todos` | Open the to-do dashboard in your browser |
+| `batch_update_todos` | Complete, update, and add to-dos in one call |
+
+## To-Do Tracking (Experimental)
+
+Cereal can track action items per client. You can add to-dos manually through Claude or have them extracted automatically from meeting transcripts.
+
+**Manual usage:**
+- "Add a to-do for ClientA: send revised SOW by Friday"
+- "What's on my to-do list?"
+- "Mark the ClientB estimate to-do as done"
+- "Show me overdue items"
+
+### AI Todo Extraction (Experimental)
+
+When enabled, Cereal uses Claude Haiku to automatically extract PM-level action items from meeting transcripts after archival. It focuses on items you need to drive — client deliverables, decisions, follow-ups, and blockers — and skips developer/designer tasks.
+
+**Setup:**
+```bash
+# Run the migration
+psql cereal < scripts/todos_migration.sql
+psql cereal < scripts/todo_extraction_migration.sql
+
+# Enable extraction in .env
+CEREAL_TODO_EXTRACTION=1
+ANTHROPIC_API_KEY=your-key-here
+```
+
+Extraction runs automatically during both manual archival (`archive_new_meetings`) and the auto-archive cron. Each meeting is only processed once. Extraction failures never block archival.
+
+### Web Dashboard
+
+A Flask app serves a to-do dashboard at `http://localhost:5555`:
+
+```bash
+python web/run.py --open
+```
+
+Filter by client, show/hide completed items, and auto-refreshes every 30 seconds.
+
 ## Example Conversations
 
 Once configured, you can ask Claude things like:
@@ -171,6 +224,13 @@ Once configured, you can ask Claude things like:
 - "Add an alias 'Project Alpha' for client 'ClientC'"
 - "Show me all client aliases"
 
+**To-Dos:**
+- "Add a to-do for ClientA: send revised SOW by Friday"
+- "What's on my to-do list?"
+- "Show me overdue items across all clients"
+- "Mark the ClientB estimate to-do as done"
+- "Open the to-do dashboard"
+
 **Integrations:**
 - "Help me map my clients to Linear teams"
 - "Link client ClientA to Linear team [team_id]"
@@ -188,10 +248,20 @@ cereal/
 │   └── run_server.sh         # Launcher script
 ├── src/                      # Core modules
 │   ├── database.py           # PostgreSQL operations
-│   └── granola_client.py     # Granola API client
+│   ├── granola_client.py     # Granola API client
+│   └── services/             # Shared business logic
+│       ├── todo_service.py
+│       ├── todo_extraction_service.py
+│       ├── client_service.py
+│       └── client_detection.py
+├── web/                      # Flask web app (to-do dashboard)
+│   ├── run.py                # Entry point (http://localhost:5555)
+│   ├── routes/               # Blueprints (todos, activity)
+│   └── templates/            # Jinja2 templates
 ├── scripts/
 │   ├── setup_database.sql    # Core database schema
 │   ├── timeline_migration.sql # Timeline tables
+│   ├── todos_migration.sql   # To-do table
 │   ├── auto_archive.py       # Automated meeting archival
 │   └── auto_archive_ctl.sh   # Enable/disable auto-archive schedule
 ├── skills/                   # Claude Code skill prompts

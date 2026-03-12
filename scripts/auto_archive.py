@@ -29,6 +29,9 @@ load_dotenv(PROJECT_ROOT / ".env")
 from src.database import DatabaseManager
 from src.granola_client import GranolaClient
 from src.services.client_detection import detect_client_from_meeting
+from src.services.client_service import INTERNAL_CLIENT_NAME
+from src.services.todo_extraction_service import TodoExtractionService
+from src.services.activity_log_service import ActivityLogService
 
 # Config
 SETTLE_HOURS = float(os.getenv("AUTO_ARCHIVE_SETTLE_HOURS", "2"))
@@ -81,10 +84,11 @@ def auto_archive(dry_run: bool = False, limit: int = 50,
 
     # Init clients
     db = DatabaseManager(os.getenv("DATABASE_URL"))
+    activity = ActivityLogService(db)
     granola = GranolaClient()
 
-    # Fetch state for client detection
-    known_clients = db.get_client_names()
+    # Fetch state for client detection (exclude Internal to avoid false matches)
+    known_clients = [c for c in db.get_client_names() if c != INTERNAL_CLIENT_NAME]
     aliases = db.get_client_aliases()
     logger.info(f"Loaded {len(known_clients)} clients, {len(aliases)} aliases")
 
@@ -134,6 +138,12 @@ def auto_archive(dry_run: bool = False, limit: int = 50,
             logger.info(f"  [dry-run] Would archive: {title[:60]}")
         return
 
+    # AI todo extraction (opt-in)
+    extraction_enabled = TodoExtractionService.is_enabled()
+    extractor = TodoExtractionService(db) if extraction_enabled else None
+    if extraction_enabled:
+        logger.info("AI todo extraction enabled")
+
     # Archive each document
     archived = 0
     errors = 0
@@ -160,8 +170,10 @@ def auto_archive(dry_run: bool = False, limit: int = 50,
                 client_id = db.get_or_create_client(detected_client)
                 if detected_client not in known_clients:
                     known_clients.append(detected_client)
+                    activity.log("client_created", f"New client created: {detected_client}",
+                                 {"source": "auto_archive", "client": detected_client})
 
-            db.archive_meeting(
+            meeting_id = db.archive_meeting(
                 granola_document_id=doc_id,
                 title=title,
                 meeting_date=meeting_date,
@@ -176,12 +188,45 @@ def auto_archive(dry_run: bool = False, limit: int = 50,
             client_note = f" -> {detected_client}" if detected_client else ""
             logger.info(f"  Archived: {title[:60]}{client_note}")
 
+            if detected_client:
+                activity.log("meeting_archived", f'Archived "{title}" \u2192 {detected_client}',
+                             {"source": "auto_archive", "meeting_id": meeting_id, "client": detected_client})
+            else:
+                activity.log("meeting_archived", f'Archived "{title}" \u2014 no client detected',
+                             {"source": "auto_archive", "meeting_id": meeting_id})
+
+            # AI todo extraction (post-archival, never blocks)
+            if extraction_enabled and extractor and client_id is not None:
+                try:
+                    ext_result = extractor.extract_todos_from_meeting(
+                        meeting_id=meeting_id, client_id=client_id, title=title,
+                        enhanced_notes=content.get('enhanced_notes'),
+                        transcript=content.get('transcript'),
+                    )
+                    if not ext_result['skipped'] and not ext_result['error']:
+                        logger.info(f"  Extracted: +{ext_result['new_count']} todos, {ext_result['completed_count']} completed")
+                        activity.log("todos_extracted",
+                                     f'Extracted todos from "{title}" \u2014 {ext_result["new_count"]} new, {ext_result["completed_count"]} completed',
+                                     {"source": "auto_archive", "meeting_id": meeting_id,
+                                      "new_count": ext_result["new_count"], "completed_count": ext_result["completed_count"]})
+                    elif ext_result['error']:
+                        logger.warning(f"  Extraction issue: {ext_result['error']}")
+                        activity.log("extraction_error", f'Extraction failed for "{title}"',
+                                     {"source": "auto_archive", "meeting_id": meeting_id, "error": ext_result['error']})
+                except Exception as e:
+                    logger.error(f"  Todo extraction error: {e}")
+                    activity.log("extraction_error", f'Extraction failed for "{title}"',
+                                 {"source": "auto_archive", "meeting_id": meeting_id, "error": str(e)})
+
         except Exception as e:
             errors += 1
             logger.error(f"  Error archiving '{title[:40]}': {e}")
 
     elapsed = round(time.time() - start, 1)
     logger.info(f"Auto-archive complete: {archived} archived, {errors} errors ({elapsed}s)")
+    activity.log("archive_run",
+                 f"Auto-archive completed \u2014 {archived} archived, {errors} errors",
+                 {"source": "auto_archive", "archived": archived, "errors": errors, "elapsed_s": elapsed})
 
 
 def main():

@@ -26,6 +26,9 @@
       <a href="{{ url_for('timelines.overview') }}" class="sidebar-link {% if request.blueprint == 'timelines' %}active{% endif %}">
         Timelines
       </a>
+      <a href="{{ url_for('activity.index') }}" class="sidebar-link {% if request.blueprint == 'activity' %}active{% endif %}">
+        Logs
+      </a>
     </nav>
     <div class="sidebar-section">
       <div class="sidebar-section-title">Clients</div>

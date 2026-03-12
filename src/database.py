@@ -1078,16 +1078,17 @@ class DatabaseManager:
         due_date: Optional[str] = None,
         category: Optional[str] = None,
         meeting_id: Optional[int] = None,
-        source_context: Optional[str] = None
+        source_context: Optional[str] = None,
+        assigned_to: Optional[str] = None
     ) -> Dict:
         """Create a single to-do item. Returns the created row."""
         with self.get_cursor() as cursor:
             cursor.execute("""
                 INSERT INTO client_todos
-                    (client_id, title, description, priority, due_date, category, meeting_id, source_context)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    (client_id, title, description, priority, due_date, category, meeting_id, source_context, assigned_to)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING *
-            """, (client_id, title, description, priority, due_date, category, meeting_id, source_context))
+            """, (client_id, title, description, priority, due_date, category, meeting_id, source_context, assigned_to))
             return cursor.fetchone()
 
     def batch_create_todos(
@@ -1114,8 +1115,8 @@ class DatabaseManager:
             for item in items:
                 cursor.execute("""
                     INSERT INTO client_todos
-                        (client_id, title, description, priority, due_date, category, meeting_id, source_context)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        (client_id, title, description, priority, due_date, category, meeting_id, source_context, assigned_to)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING *
                 """, (
                     client_id,
@@ -1125,7 +1126,8 @@ class DatabaseManager:
                     item.get('due_date'),
                     item.get('category'),
                     item.get('meeting_id', meeting_id),
-                    item.get('source_context', source_context)
+                    item.get('source_context', source_context),
+                    item.get('assigned_to')
                 ))
                 created.append(cursor.fetchone())
         return created
@@ -1321,6 +1323,24 @@ class DatabaseManager:
         with self.get_cursor() as cursor:
             cursor.execute("DELETE FROM client_todos WHERE id = %s", (todo_id,))
             return cursor.rowcount > 0
+
+    def mark_todos_extracted(self, meeting_id: int) -> None:
+        """Mark a meeting as having had todos extracted by AI."""
+        with self.get_cursor() as cursor:
+            cursor.execute(
+                "UPDATE meetings SET todos_extracted_at = NOW() WHERE id = %s",
+                (meeting_id,)
+            )
+
+    def is_todos_extracted(self, meeting_id: int) -> bool:
+        """Check if todo extraction has already run for this meeting."""
+        with self.get_cursor() as cursor:
+            cursor.execute(
+                "SELECT todos_extracted_at IS NOT NULL FROM meetings WHERE id = %s",
+                (meeting_id,)
+            )
+            row = cursor.fetchone()
+            return bool(row and list(row.values())[0])
 
     def search_todos(self, query: str, client_id: Optional[int] = None, limit: int = 20) -> List[Dict]:
         """
@@ -1772,6 +1792,39 @@ class DatabaseManager:
                 WHERE alert_type = %s AND reference_id = %s
             """, (alert_type, reference_id))
             return cursor.rowcount > 0
+
+
+    # Activity log methods
+
+    def log_activity(self, event_type: str, summary: str, details: Optional[Dict] = None):
+        """Insert a row into activity_log. Fire-and-forget style."""
+        with self.get_cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO activity_log (event_type, summary, details) VALUES (%s, %s, %s)",
+                (event_type, summary, Json(details) if details else None),
+            )
+
+    def get_activity_log(self, days: int = 1, event_type: Optional[str] = None, limit: int = 200) -> List[Dict]:
+        """Return recent activity log entries, newest first."""
+        with self.get_cursor() as cursor:
+            if event_type:
+                cursor.execute("""
+                    SELECT id, event_type, summary, details, created_at
+                    FROM activity_log
+                    WHERE created_at >= NOW() - INTERVAL '%s days'
+                      AND event_type = %s
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                """, (days, event_type, limit))
+            else:
+                cursor.execute("""
+                    SELECT id, event_type, summary, details, created_at
+                    FROM activity_log
+                    WHERE created_at >= NOW() - INTERVAL '%s days'
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                """, (days, limit))
+            return cursor.fetchall()
 
 
 def get_database_manager() -> Optional[DatabaseManager]:

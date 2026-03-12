@@ -47,14 +47,19 @@ Granola (local app) → GranolaClient → PostgreSQL ← MCP Server → Claude D
 | `scripts/auto_archive.py` | Automated meeting archival script |
 | `scripts/auto_archive_ctl.sh` | launchd enable/disable/status helper |
 | `scripts/todos_migration.sql` | To-do table migration |
+| `scripts/todo_extraction_migration.sql` | AI extraction columns migration |
+| `scripts/activity_log_migration.sql` | Activity log table migration |
 | `src/services/client_detection.py` | Client detection logic (shared) |
 | `src/services/todo_service.py` | Todo grouping/matching helpers |
+| `src/services/todo_extraction_service.py` | AI todo extraction from transcripts |
 | `src/services/client_service.py` | Client lookup helpers |
+| `src/services/activity_log_service.py` | Pipeline activity logging |
 | `web/__init__.py` | Flask app factory (`create_app()`) |
 | `web/config.py` | Flask configuration |
 | `web/extensions.py` | DB lifecycle (pooled DatabaseManager) |
 | `web/run.py` | Web app entry point (replaces dashboard/serve.py) |
 | `web/routes/todos.py` | `/todos` blueprint |
+| `web/routes/activity.py` | `/activity` blueprint (pipeline logs) |
 | `web/templates/` | Jinja2 templates (base.html, todos/) |
 | `web/static/css/style.css` | CSS with design tokens |
 | `dashboard/serve.py` | Legacy dashboard (deprecated, kept as fallback) |
@@ -62,7 +67,7 @@ Granola (local app) → GranolaClient → PostgreSQL ← MCP Server → Claude D
 
 ## Database Schema
 
-Core tables: `clients`, `meeting_series`, `meetings`, `client_context`, `client_aliases`, `client_integrations`, `client_todos`
+Core tables: `clients`, `meeting_series`, `meetings`, `client_context`, `client_aliases`, `client_integrations`, `client_todos`, `activity_log`
 
 Timeline tables: `timelines`, `timeline_phases`, `timeline_milestones`, `timeline_workshops`, `timeline_snapshots`, `timeline_linear_mappings`
 
@@ -100,9 +105,13 @@ The `client_todos` table stores:
 - `priority` - 0=None, 1=Urgent, 2=High, 3=Normal, 4=Low (matches Linear)
 - `due_date` - optional due date
 - `completed_at` - auto-managed timestamp (set on done, cleared on reopen)
-- `category` - agent-assigned freeform tag ("design", "follow-up", "billing")
+- `category` - agent-assigned freeform tag ("decision", "deliverable", "follow-up", "billing", "planning", "blocker", "review")
 - `meeting_id` - optional link to source meeting
 - `source_context` - free-text provenance ("from workshop 2", "per Slack thread")
+- `assigned_to` - who owns this item: `us`, `them`, or `unclear` (default: `us`)
+
+The `meetings` table also has:
+- `todos_extracted_at` - timestamp set after AI todo extraction runs (prevents re-extraction)
 
 Full-text search indexes exist on transcript, notes, summary, and context fields.
 
@@ -129,6 +138,29 @@ When `archive_new_meetings` runs, it automatically detects clients for each meet
 - `INTERNAL_DOMAIN` env var - your company's email domain; emails from this domain are treated as internal
 
 New clients are auto-created via `get_or_create_client()`. Meetings without detected clients have `client_id = NULL`.
+
+## Internal Virtual Client
+
+A reserved client called "Internal" exists for tracking non-client business items (taxes, admin, management tasks). It uses the existing client/todo infrastructure with no schema changes.
+
+**Constant:** `INTERNAL_CLIENT_NAME = "Internal"` in `src/services/client_service.py` — single source of truth, imported everywhere.
+
+**Auto-created:** `ClientService.ensure_internal_client()` runs at MCP server init (in `get_db()`).
+
+**Where it's filtered out:**
+- `list_clients` MCP tool — shown at the bottom with *(internal/non-client items)* label
+- `get_meeting_stats` MCP tool — excluded from client count and top-clients
+- `archive_new_meetings` + `auto_archive.py` — excluded from `known_clients` to prevent false title matches
+- Dashboard home page (`DashboardService.get_client_overview()`) — not shown
+- Sidebar nav (`web/__init__.py`) — not shown
+
+**Where it appears normally:**
+- `add_todo(client_name="Internal", ...)` — works like any client
+- `list_todos` / `list_overdue_todos` — Internal group sorted last
+- Todo dashboard (`/todos`) — Internal pill separated by `|`, group header shows "(non-client items)"
+- Client detail page (`/clients/Internal`) — works normally
+
+**Usage:** `add_todo(client_name="Internal", title="File Q1 taxes")`
 
 ## MCP Tools
 
@@ -296,6 +328,32 @@ python scripts/auto_archive.py --settle-hours 1    # Override settle period
 
 **Note:** `detect_client_from_meeting()` lives in `src/services/client_detection.py` and is imported by both `server.py` and `auto_archive.py`.
 
+## AI Todo Extraction
+
+After meetings are archived, an AI agent (Claude Haiku by default) reviews the full transcript and extracts action items as to-dos. It also detects if existing open to-dos were discussed as completed and marks them done.
+
+**Opt-in:** Set `CEREAL_TODO_EXTRACTION=1` in `.env`. Disabled by default.
+
+**Migration:** `psql $DATABASE_URL -f scripts/todo_extraction_migration.sql`
+
+**How it works:**
+- Both `auto_archive.py` and `archive_new_meetings` MCP tool trigger extraction post-archival
+- Sends the full transcript + existing open todos to Claude Haiku
+- LLM returns structured JSON with new action items and completed item matches
+- New todos are created via `batch_create_todos()` with `source_context="auto-extracted from '...'"` and `assigned_to` set to `us`/`them`/`unclear`
+- Completed todos are matched by title substring (exact single match only, skips ambiguous)
+- `todos_extracted_at` timestamp on `meetings` prevents duplicate extraction
+- Failures never block archival
+
+**Key files:**
+- `src/services/todo_extraction_service.py` — core extraction service
+- `scripts/todo_extraction_migration.sql` — migration for `assigned_to` and `todos_extracted_at` columns
+
+**Environment variables:**
+- `CEREAL_TODO_EXTRACTION` — set to `1`/`true`/`yes` to enable (default: off)
+- `CEREAL_EXTRACTION_MODEL` — override model (default: `claude-haiku-4-5-20251001`)
+- `ANTHROPIC_API_KEY` — required when extraction is enabled
+
 ## Web App
 
 Flask web app at `http://localhost:5555`. Serves the to-do dashboard (and future pages). Uses `src/services/` for business logic shared with MCP.
@@ -350,6 +408,9 @@ This starts an interactive session where you can test tools directly.
 
 - `DATABASE_URL` - PostgreSQL connection string (default: `postgresql://localhost:5432/cereal`)
 - `INTERNAL_DOMAIN` - Your company's email domain for client detection (e.g., `yourcompany.com`)
+- `CEREAL_TODO_EXTRACTION` - Enable AI todo extraction (`1`/`true`/`yes`, default: off)
+- `CEREAL_EXTRACTION_MODEL` - LLM model for extraction (default: `claude-haiku-4-5-20251001`)
+- `ANTHROPIC_API_KEY` - API key for AI todo extraction
 
 ### Claude Desktop config
 

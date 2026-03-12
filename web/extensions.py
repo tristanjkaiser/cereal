@@ -1,5 +1,6 @@
 """Database lifecycle for the Flask app."""
 from src.database import DatabaseManager
+from src.services.client_service import ClientService
 
 _db = None
 
@@ -11,6 +12,8 @@ def init_db(app):
         database_url=app.config["DATABASE_URL"],
         pool_size=app.config["POOL_SIZE"],
     )
+
+    ClientService(_db).ensure_internal_client()
 
     @app.teardown_appcontext
     def _shutdown(exc):

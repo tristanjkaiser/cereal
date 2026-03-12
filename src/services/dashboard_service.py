@@ -1,6 +1,8 @@
 """Dashboard service — assembles client overview for the home page."""
 from datetime import date
 
+from src.services.client_service import INTERNAL_CLIENT_NAME
+
 
 class DashboardService:
     def __init__(self, db):
@@ -15,7 +17,8 @@ class DashboardService:
         Returns:
             tuple of (active_clients, inactive_clients)
         """
-        clients = self.db.get_client_dashboard_summary()
+        clients = [c for c in self.db.get_client_dashboard_summary()
+                   if c['name'] != INTERNAL_CLIENT_NAME]
         todo_rows = self.db.get_todo_counts_by_client()
         todo_map = {r["client_id"]: r for r in todo_rows}
 

@@ -51,7 +51,10 @@ try:
     from src.database import DatabaseManager
     from src.granola_client import GranolaClient
     from src.services.client_detection import detect_client_from_meeting
+    from src.services.client_service import ClientService, INTERNAL_CLIENT_NAME
     from src.services.todo_service import TodoService
+    from src.services.todo_extraction_service import TodoExtractionService
+    from src.services.activity_log_service import ActivityLogService
     logger.info("Successfully imported DatabaseManager and GranolaClient")
 
 except Exception as e:
@@ -78,6 +81,7 @@ def get_db() -> DatabaseManager:
         logger.info("Connecting to database...")
         _db = DatabaseManager(database_url)
         logger.info("Database connected successfully")
+        ClientService(_db).ensure_internal_client()
     return _db
 
 
@@ -138,9 +142,17 @@ def list_clients() -> str:
     if not clients:
         return "No clients found. Meetings may not be tagged with clients yet."
 
+    # Separate Internal from real clients
+    real_clients = [c for c in clients if c['name'] != INTERNAL_CLIENT_NAME]
+    internal = [c for c in clients if c['name'] == INTERNAL_CLIENT_NAME]
+
     lines = ["# Clients\n"]
-    for client in clients:
+    for client in real_clients:
         lines.append(f"- **{client['name']}**: {client['meeting_count']} meetings")
+
+    if internal:
+        lines.append("")
+        lines.append(f"- **{INTERNAL_CLIENT_NAME}** *(internal/non-client items)*")
 
     return "\n".join(lines)
 
@@ -316,16 +328,19 @@ def get_meeting_stats() -> str:
     clients = db.get_clients_with_meeting_counts()
     recent = db.get_recent_meetings(days=30)
 
+    # Exclude Internal from stats
+    real_clients = [c for c in clients if c['name'] != INTERNAL_CLIENT_NAME]
+
     lines = [
         "# Meeting Archive Statistics\n",
         f"**Total meetings archived:** {total_meetings}",
-        f"**Total clients:** {len(clients)}",
+        f"**Total clients:** {len(real_clients)}",
         f"**Meetings in last 30 days:** {len(recent)}",
         "",
         "## Top Clients by Meeting Count"
     ]
 
-    for client in clients[:5]:
+    for client in real_clients[:5]:
         lines.append(f"- {client['name']}: {client['meeting_count']} meetings")
 
     return "\n".join(lines)
@@ -357,9 +372,9 @@ def archive_new_meetings(limit: int = 50) -> str:
         logger.exception(f"Error querying archived IDs: {e}")
         return f"Error querying database: {e}"
 
-    # Get known client names for matching
+    # Get known client names for matching (exclude Internal to avoid false matches)
     try:
-        known_clients = db.get_client_names()
+        known_clients = [c for c in db.get_client_names() if c != INTERNAL_CLIENT_NAME]
         logger.info(f"Found {len(known_clients)} known clients for matching")
     except Exception as e:
         logger.exception(f"Error fetching client names: {e}")
@@ -431,9 +446,12 @@ def archive_new_meetings(limit: int = 50) -> str:
                 # Add to known clients for subsequent matches
                 if detected_client not in known_clients:
                     known_clients.append(detected_client)
+                    activity = ActivityLogService(db)
+                    activity.log("client_created", f"New client created: {detected_client}",
+                                 {"source": "mcp", "client": detected_client})
 
             # Archive to database with client
-            db.archive_meeting(
+            meeting_id = db.archive_meeting(
                 granola_document_id=doc_id,
                 title=title,
                 meeting_date=meeting_date,
@@ -445,14 +463,65 @@ def archive_new_meetings(limit: int = 50) -> str:
             )
             archived_count += 1
 
-            # Track details for response
+            # Activity log
+            activity = ActivityLogService(db)
+            if detected_client:
+                activity.log("meeting_archived", f'Archived "{title}" \u2192 {detected_client}',
+                             {"source": "mcp", "meeting_id": meeting_id, "client": detected_client})
+            else:
+                activity.log("meeting_archived", f'Archived "{title}" \u2014 no client detected',
+                             {"source": "mcp", "meeting_id": meeting_id})
+
+            # Track details for response (and for extraction)
             client_note = f" → {detected_client}" if detected_client else ""
-            archived_details.append(f"- {title[:50]}{client_note}")
+            archived_details.append({
+                "label": f"- {title[:50]}{client_note}",
+                "meeting_id": meeting_id,
+                "client_id": client_id,
+                "title": title,
+                "enhanced_notes": content.get('enhanced_notes'),
+                "transcript": content.get('transcript'),
+            })
             logger.info(f"Archived: {title[:50]} (client: {detected_client or 'none'})")
 
         except Exception as e:
             logger.exception(f"Error archiving {title}: {e}")
             errors.append(f"{title[:30]}: {e}")
+
+    # AI todo extraction (post-archival, never blocks)
+    extraction_lines = []
+    activity = ActivityLogService(db)
+    if TodoExtractionService.is_enabled() and archived_details:
+        extractor = TodoExtractionService(db)
+        for info in archived_details:
+            if info["client_id"] is None:
+                continue
+            try:
+                ext_result = extractor.extract_todos_from_meeting(
+                    meeting_id=info["meeting_id"],
+                    client_id=info["client_id"],
+                    title=info["title"],
+                    enhanced_notes=info.get("enhanced_notes"),
+                    transcript=info.get("transcript"),
+                )
+                if not ext_result["skipped"] and not ext_result["error"]:
+                    if ext_result["new_count"] or ext_result["completed_count"]:
+                        extraction_lines.append(
+                            f"- {info['title'][:50]}: +{ext_result['new_count']} new, "
+                            f"{ext_result['completed_count']} completed"
+                        )
+                    activity.log("todos_extracted",
+                                 f'Extracted todos from "{info["title"]}" \u2014 {ext_result["new_count"]} new, {ext_result["completed_count"]} completed',
+                                 {"source": "mcp", "meeting_id": info["meeting_id"],
+                                  "new_count": ext_result["new_count"], "completed_count": ext_result["completed_count"]})
+                elif ext_result["error"]:
+                    logger.warning(f"Extraction issue for {info['title'][:40]}: {ext_result['error']}")
+                    activity.log("extraction_error", f'Extraction failed for "{info["title"]}"',
+                                 {"source": "mcp", "meeting_id": info["meeting_id"], "error": ext_result["error"]})
+            except Exception as e:
+                logger.error(f"Todo extraction error for {info['title'][:40]}: {e}")
+                activity.log("extraction_error", f'Extraction failed for "{info["title"]}"',
+                             {"source": "mcp", "meeting_id": info["meeting_id"], "error": str(e)})
 
     # Build response
     lines = [
@@ -464,12 +533,20 @@ def archive_new_meetings(limit: int = 50) -> str:
 
     if archived_details:
         lines.append("\n## Archived Meetings")
-        lines.extend(archived_details)
+        lines.extend(info["label"] for info in archived_details)
+
+    if extraction_lines:
+        lines.append("\n## AI Todo Extraction")
+        lines.extend(extraction_lines)
 
     if errors:
         lines.append(f"\n**Errors:** {len(errors)}")
         for error in errors[:3]:
             lines.append(f"  - {error}")
+
+    activity.log("archive_run",
+                 f"Archive completed \u2014 {archived_count} archived, {len(errors)} errors",
+                 {"source": "mcp", "archived": archived_count, "errors": len(errors)})
 
     return "\n".join(lines)
 
@@ -868,13 +945,17 @@ def list_todos(
         scope = f" for {client_name}" if client_name else ""
         return f"No to-dos found{scope}."
 
-    # Group by client
+    # Group by client, Internal last
     by_client = {}
     for todo in todos:
         cname = todo['client_name']
         if cname not in by_client:
             by_client[cname] = []
         by_client[cname].append(todo)
+
+    if INTERNAL_CLIENT_NAME in by_client:
+        internal_todos = by_client.pop(INTERNAL_CLIENT_NAME)
+        by_client[INTERNAL_CLIENT_NAME] = internal_todos
 
     lines = []
     for cname, client_todos in by_client.items():
@@ -1028,6 +1109,10 @@ def list_overdue_todos(client_name: str = None, limit: int = 50) -> str:
         if cname not in by_client:
             by_client[cname] = []
         by_client[cname].append(todo)
+
+    if INTERNAL_CLIENT_NAME in by_client:
+        internal_todos = by_client.pop(INTERNAL_CLIENT_NAME)
+        by_client[INTERNAL_CLIENT_NAME] = internal_todos
 
     lines = [f"# Overdue To-Dos\n"]
     for cname, client_todos in by_client.items():

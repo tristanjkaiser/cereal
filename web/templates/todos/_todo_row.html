@@ -2,9 +2,6 @@
 {% set due_date = todo.due_date %}
 {% set overdue = due_date is not none and due_date < today and not is_done %}
 <tr id="todo-{{ todo.id }}" class="{{ 'overdue-row' if overdue else '' }}{{ ' done' if is_done else '' }}">
-  <td class="td-check">
-    <input type="checkbox" name="todo_ids" value="{{ todo.id }}" class="td-select" form="bulk-form">
-  </td>
   <td class="status">
     <button class="td-status-btn"
             hx-post="{{ url_for('todos.complete', todo_id=todo.id) }}"

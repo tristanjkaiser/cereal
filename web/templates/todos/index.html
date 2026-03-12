@@ -29,8 +29,16 @@
     <a href="{{ url_for('todos.index', view=view, done=1 if show_done else '') }}"
        class="{{ 'active' if not client_filter else '' }}">All Clients</a>
     {% for c in all_clients %}
+      {% if c.name != 'Internal' %}
     <a href="{{ url_for('todos.index', view=view, client=c.name, done=1 if show_done else '') }}"
        class="{{ 'active' if c.name == client_filter else '' }}">{{ c.name }}</a>
+      {% endif %}
+    {% endfor %}
+    {# Internal pill separated #}
+    {% for c in all_clients if c.name == 'Internal' %}
+    <span class="td-filter-sep">|</span>
+    <a href="{{ url_for('todos.index', view=view, client='Internal', done=1 if show_done else '') }}"
+       class="{{ 'active' if 'Internal' == client_filter else '' }}">Internal</a>
     {% endfor %}
   </div>
   {% if view != 'my_day' %}
@@ -42,25 +50,12 @@
   {% endif %}
 </div>
 
-{# ── Bulk action bar ── #}
-<div class="td-bulk-bar" id="bulk-bar" style="display:none">
-  <form id="bulk-form" hx-post="{{ url_for('todos.bulk') }}" hx-swap="none"
-        hx-on::after-request="window.location.reload()">
-    <span class="td-bulk-label"><span id="bulk-count">0</span> selected</span>
-    <button type="submit" name="action" value="complete" class="td-bulk-btn">Complete</button>
-    <button type="submit" name="action" value="priority_1" class="td-bulk-btn td-bulk-urgent">Urgent</button>
-    <button type="submit" name="action" value="priority_2" class="td-bulk-btn td-bulk-high">High</button>
-    <button type="submit" name="action" value="priority_3" class="td-bulk-btn">Normal</button>
-    <button type="submit" name="action" value="delete" class="td-bulk-btn td-bulk-danger"
-            onclick="return confirm('Delete selected todos?')">Delete</button>
-  </form>
-</div>
 
 {% if by_group %}
 {% for group_name, todos in by_group.items() %}
 {% set open_count = todos | selectattr('status', 'ne', 'done') | selectattr('status', 'ne', 'archived') | list | length %}
 <div class="client-card">
-  <h2>{{ group_name }} <span class="count">{{ open_count }} open</span></h2>
+  <h2>{{ group_name }}{% if group_name == 'Internal' %} <span class="subtitle">(non-client items)</span>{% endif %} <span class="count">{{ open_count }} open</span></h2>
 
   {# ── Quick-add ── #}
   {% if group_label == 'client' %}
@@ -77,7 +72,6 @@
   <table>
     <thead>
       <tr>
-        <th style="width:2rem"></th>
         <th style="width:2.5rem">Status</th>
         <th>Title</th>
         <th style="width:5.5rem">Priority</th>
@@ -105,21 +99,6 @@
 {% endif %}
 
 <script>
-// Bulk selection
-document.addEventListener('change', function(e) {
-  if (e.target.classList.contains('td-select')) {
-    var checked = document.querySelectorAll('.td-select:checked');
-    var bar = document.getElementById('bulk-bar');
-    var count = document.getElementById('bulk-count');
-    if (checked.length > 0) {
-      bar.style.display = '';
-      count.textContent = checked.length;
-    } else {
-      bar.style.display = 'none';
-    }
-  }
-});
-
 // SortableJS for each tbody
 document.querySelectorAll('.td-sortable').forEach(function(tbody) {
   new Sortable(tbody, {
